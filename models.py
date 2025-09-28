@@ -29,6 +29,7 @@ def generate_guard_email(guard_name: str, area_city: str) -> str:
 
 class UserRole(str, Enum):
     """User roles enum"""
+    SUPER_ADMIN = "SUPER_ADMIN"
     ADMIN = "ADMIN"
     SUPERVISOR = "SUPERVISOR"
     GUARD = "GUARD"
@@ -817,5 +818,107 @@ class SupervisorAddGuardRequest(BaseModel):
         return v
 
     password: str = Field(..., min_length=8, description="Password for the guard (min 8 characters)")
+
+
+# ============================================================================
+# SUPER ADMIN MODELS
+# ============================================================================
+
+class SuperAdminAddAdminRequest(BaseModel):
+    """Model for super admin adding a new state-wise admin"""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "State Admin",
+                "email": "",
+                "phone": "",
+                "password": "Admin@123",
+                "state": "Haryana"
+            }
+        }
+    )
+    
+    name: str = Field(..., min_length=2, max_length=100, description="Admin's full name")
+    email: Optional[str] = Field(
+        default=None, 
+        description="Admin's email address (optional - can be provided along with phone)"
+    )
+    phone: Optional[str] = Field(
+        default=None, 
+        description="Admin's phone number (optional - can be provided along with email)"
+    )
+    password: str = Field(..., min_length=6, max_length=50, description="Admin's initial password")
+    state: str = Field(..., min_length=2, max_length=100, description="State to manage (one admin per state)")
+
+    @model_validator(mode='after')
+    def validate_contact_method(self):
+        """Ensure at least email or phone is provided"""
+        # Treat empty strings as None
+        email = self.email.strip() if self.email else None
+        phone = self.phone.strip() if self.phone else None
+        
+        if not email and not phone:
+            raise ValueError("At least email or phone number must be provided")
+        
+        # Update the fields to clean values
+        self.email = email if email else None
+        self.phone = phone if phone else None
+        return self
+
+    @field_validator('email')
+    @classmethod
+    def validate_admin_email(cls, v: Optional[str]) -> Optional[str]:
+        """Validate admin email format"""
+        if v:
+            v = v.strip()
+            # Treat empty string as None
+            if not v:
+                return None
+            if "@" not in v:
+                raise ValueError("value is not a valid email address: An email address must have an @-sign.")
+            return v.lower()
+        return v
+
+    @field_validator('phone')
+    @classmethod
+    def validate_phone(cls, v: Optional[str]) -> Optional[str]:
+        """Validate phone number format"""
+        if v:
+            v = v.strip()
+            # Treat empty string as None
+            if not v:
+                return None
+            # Remove non-digits and validate format
+            digits_only = ''.join(filter(str.isdigit, v))
+            if len(digits_only) != 10:
+                raise ValueError("Phone number must be exactly 10 digits")
+            return digits_only
+        return v
+
+    @field_validator('state')
+    @classmethod
+    def validate_state(cls, v: str) -> str:
+        """Validate state name"""
+        return v.strip().title()  # Convert to title case for consistency
+
+
+class StateAdminResponse(BaseModel):
+    """Response model for state-wise admin"""
+    id: str = Field(..., description="Admin ID")
+    name: str = Field(..., description="Admin's full name")
+    email: Optional[str] = Field(None, description="Admin's email")
+    phone: Optional[str] = Field(None, description="Admin's phone")
+    state: str = Field(..., description="Assigned state")
+    isActive: bool = Field(..., description="Active status")
+    createdAt: datetime = Field(..., description="Creation timestamp")
+    createdBy: str = Field(..., description="Super admin who created this admin")
+
+
+class SuperAdminDashboardResponse(BaseModel):
+    """Super admin dashboard response"""
+    stats: Dict[str, int] = Field(..., description="System statistics")
+    stateAdmins: List[StateAdminResponse] = Field(..., description="List of state-wise admins")
+    recentActivity: List[Dict[str, Any]] = Field(..., description="Recent system activity")
+    superAdminInfo: Dict[str, Any] = Field(..., description="Super admin information")
 
 
