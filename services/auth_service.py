@@ -66,7 +66,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any
         raise AuthenticationError("Invalid token payload")
     
     # Get appropriate collection based on role
-    if role == "ADMIN":
+    if role in ["ADMIN", "SUPER_ADMIN"]:
         collection = get_users_collection()
     elif role == "SUPERVISOR":
         collection = get_supervisors_collection()
@@ -106,6 +106,25 @@ async def get_current_active_user(current_user: Dict[str, Any] = Depends(get_cur
     """
     Get current active user (alias for get_current_user for clarity)
     """
+    return current_user
+
+
+async def get_current_super_admin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Require current user to be a SUPER_ADMIN
+    
+    Args:
+        current_user: Current authenticated user
+        
+    Returns:
+        User document if user is super admin
+        
+    Raises:
+        AuthorizationError: If user is not super admin
+    """
+    if current_user.get("role") != UserRole.SUPER_ADMIN:
+        raise AuthorizationError("Super admin access required")
+    
     return current_user
 
 
@@ -162,6 +181,25 @@ async def get_current_guard(current_user: Dict[str, Any] = Depends(get_current_u
     """
     if current_user.get("role") != UserRole.GUARD:
         raise AuthorizationError("Guard access required")
+    
+    return current_user
+
+
+async def get_super_admin_or_admin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Require current user to be either SUPER_ADMIN or ADMIN
+    
+    Args:
+        current_user: Current authenticated user
+        
+    Returns:
+        User document if user is super admin or admin
+        
+    Raises:
+        AuthorizationError: If user is neither super admin nor admin
+    """
+    if current_user.get("role") not in [UserRole.SUPER_ADMIN, UserRole.ADMIN]:
+        raise AuthorizationError("Super Admin or Admin access required")
     
     return current_user
 
