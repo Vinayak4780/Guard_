@@ -17,11 +17,12 @@ warnings.filterwarnings("ignore", message=".*bcrypt.*", category=UserWarning)
 
 # Import configuration and services
 from config import settings
-from database import init_database, create_default_admin, get_database_health
+from database import init_database, create_default_super_admin, get_database_health
 from services.google_drive_excel_service import google_drive_excel_service
 
 # Import routes
 from routes.auth_routes import auth_router
+from routes.super_admin_routes import super_admin_router
 from routes.admin_routes_working import admin_router
 from routes.supervisor_routes import supervisor_router
 from routes.guard_routes_simple import guard_router
@@ -54,8 +55,8 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await init_database()
     
-    # Create default admin if needed
-    await create_default_admin()
+    # Create default super admin if needed
+    await create_default_super_admin()
     
     # Start background Google Drive updates
     asyncio.create_task(google_drive_excel_service.start_background_updates())
@@ -120,6 +121,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+app.include_router(super_admin_router, prefix="/super-admin", tags=["Super Admin"])
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 app.include_router(supervisor_router, prefix="/supervisor", tags=["Supervisor"])
 app.include_router(guard_router, prefix="/guard", tags=["Guard"])
@@ -146,6 +148,7 @@ async def root():
             "signup": "/auth/signup",
             "login": "/auth/login", 
             "qr_scan": "/qr/scan",
+            "super_admin_add_admin": "/super-admin/add-admin",
             "admin_dashboard": "/admin/dashboard",
             "health": "/health"
         },
