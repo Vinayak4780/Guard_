@@ -399,6 +399,101 @@ class EmailService:
             logger.error(f"Failed to send guard credentials email to {to_email}: {e}")
             return False
 
+    async def send_super_admin_credentials_email(self, to_email: str, name: str, password: str) -> bool:
+        """
+        Send credentials email to newly created super admin
+        
+        Args:
+            to_email: Super admin's email address
+            name: Super admin's full name
+            password: Generated or default password
+            
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        try:
+            # Check if email service is properly configured
+            is_configured = all([
+                self.smtp_host and self.smtp_host.strip(),
+                self.smtp_username and self.smtp_username != "your-email@gmail.com" and "@" in self.smtp_username,
+                self.smtp_password and self.smtp_password not in [
+                    "your-16-digit-app-password-here",
+                    "your-app-password-here",
+                    "abcdefghijklmnop",
+                    "DEVELOPMENT_MODE"
+                ],
+                self.from_email and self.from_email != "your-email@gmail.com" and "@" in self.from_email
+            ])
+
+            if not is_configured:
+                # Development mode - just log credentials
+                logger.warning("📧 EMAIL SERVICE NOT CONFIGURED - DEVELOPMENT MODE")
+                logger.warning("=" * 60)
+                logger.warning(f"🔐 SUPER ADMIN CREDENTIALS for {to_email}:")
+                logger.warning(f"👤 Name: {name}")
+                logger.warning(f"📧 Email: {to_email}")
+                logger.warning(f"🔑 Password: {password}")
+                logger.warning("=" * 60)
+                print(f"\n🔐 SUPER ADMIN CREDENTIALS: {to_email} / {password}\n")
+                return True
+
+            subject = "Your Super Admin Account - Guard Management System"
+
+            html_content = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #343a40;">Super Admin Account Created</h2>
+                    <p>Dear {name},</p>
+                    <p>Your Super Admin account has been created for the Guard Management System. Below are your login credentials:</p>
+                    <div style="background-color: #eef2ff; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0;">
+                        <p style="margin: 5px 0;"><strong>Email:</strong> {to_email}</p>
+                        <p style="margin: 5px 0;"><strong>Password:</strong> <code style="background-color: #f8f9fa; padding: 2px 6px; border-radius: 3px; font-family: monospace;">{password}</code></p>
+                    </div>
+                    <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
+                        <h3 style="margin-top: 0; color: #856404;">Security Instructions</h3>
+                        <ul style="margin-bottom: 0;">
+                            <li><strong>Change your password</strong> immediately after first login</li>
+                            <li>Keep your credentials secure and do not share them</li>
+                        </ul>
+                    </div>
+                    <p>If you have any questions or need assistance, please contact your system administrator.</p>
+                    <hr style="border: none; border-top: 1px solid #dee2e6; margin: 30px 0;">
+                    <p style="font-size: 12px; color: #6c757d;">
+                        This is an automated email from Guard Management System. Please do not reply to this email.
+                    </p>
+                </div>
+            </body>
+            </html>
+            """
+
+            # Create message
+            message = MIMEMultipart("alternative")
+            message["Subject"] = subject
+            message["From"] = f"{self.from_name} <{self.from_email}>"
+            message["To"] = to_email
+
+            # Create HTML part
+            html_part = MIMEText(html_content, "html")
+            message.attach(html_part)
+
+            # Send email
+            await aiosmtplib.send(
+                message,
+                hostname=self.smtp_host,
+                port=self.smtp_port,
+                start_tls=True,
+                username=self.smtp_username,
+                password=self.smtp_password,
+            )
+
+            logger.info(f"Super admin credentials email sent successfully to {to_email}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send super admin credentials email to {to_email}: {e}")
+            return False
+
     async def send_welcome_email(self, to_email: str, name: str, role: str) -> bool:
         """
         Send welcome email after successful account activation
