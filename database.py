@@ -105,6 +105,8 @@ async def create_indexes():
         await database.users.create_index("email", unique=True)
         await database.users.create_index([("role", 1), ("isActive", 1)])
         await database.users.create_index("createdAt")
+        # Add index for state-wise admin management
+        await database.users.create_index([("role", 1), ("state", 1)], unique=True, partialFilterExpression={"role": "ADMIN"})
         
         # Supervisors collection indexes
         await database.supervisors.create_index("code", unique=True)
@@ -364,9 +366,63 @@ async def cleanup_expired_tokens():
         logger.error(f"Failed to cleanup expired tokens: {e}")
 
 
-# Optional: Function to create default admin user
+# Optional: Function to create default super admin user
+async def create_default_super_admin():
+    """Create default super admin user if none exists"""
+    if database is None:
+        return
+        
+    try:
+        # Check if super admin credentials are configured
+        if not settings.DEFAULT_SUPER_ADMIN_EMAIL or not settings.DEFAULT_SUPER_ADMIN_PASSWORD:
+            logger.warning("⚠️ Super admin credentials not configured in environment variables")
+            logger.info("ℹ️ Set DEFAULT_SUPER_ADMIN_EMAIL and DEFAULT_SUPER_ADMIN_PASSWORD in .env file")
+            return
+        
+        # Check if any super admin exists
+        super_admin_exists = await database.users.find_one({"role": "SUPER_ADMIN"})
+        
+        if not super_admin_exists:
+            from services.jwt_service import jwt_service
+            from services.email_service import email_service
+            from datetime import datetime
+            
+            super_admin_data = {
+                "email": settings.DEFAULT_SUPER_ADMIN_EMAIL,
+                "passwordHash": jwt_service.hash_password(settings.DEFAULT_SUPER_ADMIN_PASSWORD),
+                "name": settings.DEFAULT_SUPER_ADMIN_NAME,
+                "role": "SUPER_ADMIN",
+                "areaCity": None,
+                "state": None,
+                "isActive": True,
+                "isEmailVerified": True,  # Super admin is pre-verified
+                "createdAt": datetime.utcnow(),
+                "updatedAt": datetime.utcnow()
+            }
+            
+            result = await database.users.insert_one(super_admin_data)
+            logger.info(f"✅ Created default super admin user: {settings.DEFAULT_SUPER_ADMIN_EMAIL}")
+            logger.warning("⚠️ Please change the default super admin password after first login!")
+
+            # Send credentials email (or log in development)
+            try:
+                await email_service.send_super_admin_credentials_email(
+                    to_email=settings.DEFAULT_SUPER_ADMIN_EMAIL,
+                    name=settings.DEFAULT_SUPER_ADMIN_NAME,
+                    password=settings.DEFAULT_SUPER_ADMIN_PASSWORD
+                )
+            except Exception as email_error:
+                logger.warning(f"⚠️ Unable to send super admin credentials email: {email_error}")
+        else:
+            logger.info("ℹ️ Super admin already exists, skipping creation")
+            
+    except Exception as e:
+        logger.error(f"Failed to create default super admin: {e}")
+
+
+# Legacy function for backward compatibility
 async def create_default_admin():
-    """Create default admin user if none exists"""
+    """Create default admin user if none exists (legacy - now handled by super admin)"""
     if database is None:
         return
         
@@ -384,6 +440,7 @@ async def create_default_admin():
                 "name": settings.DEFAULT_ADMIN_NAME,
                 "role": "ADMIN",
                 "areaCity": None,
+                "state": None,  # Will be set when created by super admin
                 "isActive": True,
                 "isEmailVerified": True,  # Admin is pre-verified
                 "createdAt": datetime.utcnow(),
