@@ -43,7 +43,12 @@ class Settings:
     # QR Location Configuration
     WITHIN_RADIUS_METERS: float = float(os.getenv("WITHIN_RADIUS_METERS", "100.0"))
     
-    # Default Admin Configuration
+    # Default Super Admin Configuration
+    DEFAULT_SUPER_ADMIN_EMAIL: str = os.getenv("DEFAULT_SUPER_ADMIN_EMAIL", "")
+    DEFAULT_SUPER_ADMIN_PASSWORD: str = os.getenv("DEFAULT_SUPER_ADMIN_PASSWORD", "")
+    DEFAULT_SUPER_ADMIN_NAME: str = os.getenv("DEFAULT_SUPER_ADMIN_NAME", "Super Administrator")
+    
+    # Default Admin Configuration (deprecated - now created by super admin)
     DEFAULT_ADMIN_EMAIL: str = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@lh.io.in")
     DEFAULT_ADMIN_PASSWORD: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "LH_Admin@2024")
     DEFAULT_ADMIN_NAME: str = os.getenv("DEFAULT_ADMIN_NAME", "System Administrator")
