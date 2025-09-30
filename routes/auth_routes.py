@@ -375,8 +375,8 @@ async def login(username: str = Form(...), password: str = Form(...)):
         try:
             user = await users_collection.find_one({"$or": [{"email": username}, {"phone": username}]})
             if user:
-                print(f"✅ Admin user found in users collection")
-                role = "ADMIN"
+                print(f"✅ User found in users collection")
+                role = user.get("role", "ADMIN")
             else:
                 print(f"❌ Admin user not found in users collection")
                 # Check in supervisors collection
