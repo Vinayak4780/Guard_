@@ -11,7 +11,8 @@ from bson import ObjectId
 
 # Import services and dependencies
 from services.auth_service import get_current_guard
-from database import get_scan_events_collection
+from services.jwt_service import jwt_service
+from database import get_scan_events_collection, get_guards_collection, get_users_collection
 from config import settings
 
 logger = logging.getLogger(__name__)

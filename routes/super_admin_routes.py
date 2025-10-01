@@ -3,21 +3,24 @@ Super Admin routes for managing state-wise admins
 SUPER_ADMIN role only - manage state-wise admins and system configuration
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from bson import ObjectId
 
 # Import services and dependencies
 from services.auth_service import get_current_super_admin
 from services.jwt_service import jwt_service
-from database import get_users_collection, get_scan_events_collection, get_guards_collection
+from services.email_service import email_service
+from database import get_users_collection, get_scan_events_collection, get_guards_collection, get_supervisors_collection, get_otp_tokens_collection
 from config import settings
 
 # Import models
 from models import (
-    SuperAdminAddAdminRequest, StateAdminResponse
+    SuperAdminAddAdminRequest, StateAdminResponse, SuperAdminChangePasswordRequest, 
+    ChangePasswordRequest, UserSearchRequest, UserSearchResponse, SuperAdminChangeOwnPasswordRequest,
+    OTPPurpose
 )
 
 logger = logging.getLogger(__name__)
@@ -453,3 +456,539 @@ async def super_admin_get_area_wise_excel_reports(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate Excel report: {str(e)}"
         )
+
+
+# ============================================================================
+# SUPER ADMIN: Change Any User Password API
+# ============================================================================
+
+@super_admin_router.put("/change-user-password")
+async def change_user_password(
+    request: SuperAdminChangePasswordRequest,
+    current_super_admin: Dict[str, Any] = Depends(get_current_super_admin)
+):
+    """
+    SUPER_ADMIN ONLY: Change password for any user (admin, supervisor, guard)
+    """
+    try:
+        users_collection = get_users_collection()
+        supervisors_collection = get_supervisors_collection()
+        guards_collection = get_guards_collection()
+
+        if (users_collection is None or supervisors_collection is None or 
+            guards_collection is None):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not available"
+            )
+
+        # Hash the new password
+        new_password_hash = jwt_service.hash_password(request.newPassword)
+
+        # Build search criteria (email OR phone)
+        search_criteria = {}
+        if request.userEmail:
+            search_criteria["email"] = request.userEmail
+        elif request.userPhone:
+            search_criteria["phone"] = request.userPhone
+
+        # Try to find user in all collections and update
+        user_found = False
+        user_type = None
+        contact_info = request.userEmail or request.userPhone
+
+        # Check and update in users collection (admins and super admins)
+        user = await users_collection.find_one(search_criteria)
+        if user:
+            await users_collection.update_one(
+                {"_id": user["_id"]},
+                {
+                    "$set": {
+                        "passwordHash": new_password_hash,
+                        "updatedAt": datetime.utcnow()
+                    }
+                }
+            )
+            user_found = True
+            user_type = "admin"
+
+        # Check and update in supervisors collection
+        supervisor = await supervisors_collection.find_one(search_criteria)
+        if supervisor:
+            await supervisors_collection.update_one(
+                {"_id": supervisor["_id"]},
+                {
+                    "$set": {
+                        "passwordHash": new_password_hash,
+                        "updatedAt": datetime.utcnow()
+                    }
+                }
+            )
+            user_found = True
+            user_type = "supervisor"
+
+        # Check and update in guards collection
+        guard = await guards_collection.find_one(search_criteria)
+        if guard:
+            await guards_collection.update_one(
+                {"_id": guard["_id"]},
+                {
+                    "$set": {
+                        "passwordHash": new_password_hash,
+                        "updatedAt": datetime.utcnow()
+                    }
+                }
+            )
+            user_found = True
+            user_type = "guard"
+
+        if not user_found:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with contact {contact_info} not found in any collection"
+            )
+
+        logger.info(f"Super Admin {current_super_admin.get('name', 'Unknown')} changed password for {user_type} {contact_info}")
+
+        return {
+            "message": f"Password changed successfully for {user_type} {contact_info}"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing user password: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to change user password: {str(e)}"
+        )
+
+
+# ============================================================================
+# SUPER ADMIN: Request Password Change OTP API
+# ============================================================================
+
+@super_admin_router.post("/request-password-change-otp")
+async def request_password_change_otp(
+    current_super_admin: Dict[str, Any] = Depends(get_current_super_admin)
+):
+    """
+    SUPER_ADMIN: Request OTP for password change via email
+    """
+    try:
+        otp_collection = get_otp_tokens_collection()
+        if otp_collection is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not available"
+            )
+
+        super_admin_email = current_super_admin.get("email")
+        if not super_admin_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Super admin email not found"
+            )
+
+        # Check rate limiting - allow one OTP per minute per email
+        recent_otp = await otp_collection.find_one({
+            "email": super_admin_email,
+            "purpose": "PASSWORD_CHANGE",
+            "createdAt": {"$gte": datetime.utcnow() - timedelta(minutes=1)}
+        })
+        
+        if recent_otp:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Please wait 1 minute before requesting another OTP"
+            )
+
+        # Generate OTP
+        otp = jwt_service.generate_otp()
+        otp_hash = jwt_service.hash_otp(otp)
+        
+        # Store OTP in database
+        expires_at = datetime.utcnow() + timedelta(minutes=10)  # 10 minutes expiry
+        
+        otp_data = {
+            "email": super_admin_email,
+            "otpHash": otp_hash,
+            "purpose": "PASSWORD_CHANGE",
+            "expiresAt": expires_at,
+            "attempts": 0,
+            "createdAt": datetime.utcnow()
+        }
+        
+        # Remove any existing OTP for this email and purpose
+        await otp_collection.delete_many({"email": super_admin_email, "purpose": "PASSWORD_CHANGE"})
+        
+        # Insert new OTP
+        await otp_collection.insert_one(otp_data)
+        
+        # Send email
+        email_sent = await email_service.send_otp_email(super_admin_email, otp, "password change")
+        
+        if not email_sent:
+            # Clean up if email failed
+            await otp_collection.delete_one({"email": super_admin_email, "purpose": "PASSWORD_CHANGE"})
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send OTP email. Please try again."
+            )
+        
+        logger.info(f"Password change OTP sent to super admin: {super_admin_email}")
+        
+        return {
+            "message": f"OTP sent to {super_admin_email}. Please check your email. OTP expires in 10 minutes."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to send password change OTP: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send OTP"
+        )
+
+
+# ============================================================================
+# SUPER ADMIN: Change Own Password API (Updated with OTP)
+# ============================================================================
+
+@super_admin_router.put("/change-password")
+async def change_super_admin_password(
+    request: SuperAdminChangeOwnPasswordRequest,
+    current_super_admin: Dict[str, Any] = Depends(get_current_super_admin)
+):
+    """
+    SUPER_ADMIN: Change own password using email OTP verification
+    """
+    try:
+        users_collection = get_users_collection()
+        otp_collection = get_otp_tokens_collection()
+
+        if users_collection is None or otp_collection is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not available"
+            )
+
+        super_admin_email = current_super_admin.get("email")
+        if not super_admin_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Super admin email not found"
+            )
+
+        # Verify OTP
+        otp_record = await otp_collection.find_one({
+            "email": super_admin_email,
+            "purpose": "PASSWORD_CHANGE"
+        })
+        
+        if not otp_record:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No OTP found. Please request an OTP first."
+            )
+        
+        # Check if OTP has expired
+        if datetime.utcnow() > otp_record["expiresAt"]:
+            await otp_collection.delete_one({"_id": otp_record["_id"]})
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OTP has expired. Please request a new OTP."
+            )
+        
+        # Check attempt limit
+        if otp_record["attempts"] >= 3:
+            await otp_collection.delete_one({"_id": otp_record["_id"]})
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Maximum OTP attempts exceeded. Please request a new OTP."
+            )
+        
+        # Verify OTP
+        if not jwt_service.verify_otp(request.otp, otp_record["otpHash"]):
+            # Increment attempt counter
+            await otp_collection.update_one(
+                {"_id": otp_record["_id"]},
+                {"$inc": {"attempts": 1}}
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid OTP. Please check and try again."
+            )
+
+        # OTP is valid - remove it and change password
+        await otp_collection.delete_one({"_id": otp_record["_id"]})
+
+        # Hash the new password
+        new_password_hash = jwt_service.hash_password(request.newPassword)
+
+        # Update password in users collection
+        super_admin_id = current_super_admin["_id"]
+        await users_collection.update_one(
+            {"_id": super_admin_id},
+            {
+                "$set": {
+                    "passwordHash": new_password_hash,
+                    "updatedAt": datetime.utcnow()
+                }
+            }
+        )
+
+        logger.info(f"Super Admin {current_super_admin.get('name', 'Unknown')} changed own password using OTP")
+
+        return {
+            "message": "Password changed successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing super admin password: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to change password: {str(e)}"
+        )
+
+
+# ============================================================================
+# SUPER ADMIN: Search Users API
+# ============================================================================
+
+@super_admin_router.get("/search-users")
+async def search_users(
+    query: Optional[str] = Query(None, description="Search by name, email, or phone"),
+    state: Optional[str] = Query(None, description="Filter by state"),
+    role: Optional[str] = Query(None, description="Filter by role: 'fieldofficer' searches supervisors, 'supervisor' searches guards, 'admin' searches admins, 'super_admin' searches super admins"),
+    current_super_admin: Dict[str, Any] = Depends(get_current_super_admin)
+):
+    """
+    SUPER_ADMIN ONLY: Search for users across all collections by name, email, phone, or state
+    Special role mapping: 'fieldofficer' searches supervisors, 'supervisor' searches guards, 'admin' searches admins, 'super_admin' searches super admins
+    """
+    try:
+        users_collection = get_users_collection()
+        supervisors_collection = get_supervisors_collection()
+        guards_collection = get_guards_collection()
+
+        if (users_collection is None or supervisors_collection is None or 
+            guards_collection is None):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not available"
+            )
+
+        all_users = []
+
+        # Build search criteria
+        search_criteria = {}
+        
+        # Handle role-based filtering
+        role_filter = None
+        if role:
+            role_lower = role.lower()
+            if role_lower in ["fieldofficer", "field-officer", "field officer"]:
+                role_filter = "supervisors"
+            elif role_lower == "supervisor":
+                role_filter = "guards"
+            elif role_lower == "admin":
+                role_filter = "admins"
+            elif role_lower in ["super_admin", "super-admin", "superadmin"]:
+                role_filter = "super_admins"
+        
+        # Also check query parameter for backward compatibility
+        if query and not role_filter:
+            query_lower = query.lower()
+            if query_lower in ["fieldofficer", "field-officer", "field officer"]:
+                role_filter = "supervisors"
+            elif query_lower == "supervisor":
+                role_filter = "guards"
+            elif query_lower == "admin":
+                role_filter = "admins"
+            elif query_lower in ["super_admin", "super-admin", "superadmin"]:
+                role_filter = "super_admins"
+
+        # Build text search criteria if query is provided and not a role keyword
+        if query and not role_filter:
+            search_criteria["$or"] = [
+                {"name": {"$regex": query, "$options": "i"}},
+                {"email": {"$regex": query, "$options": "i"}},
+                {"phone": {"$regex": query, "$options": "i"}}
+            ]
+        
+        # Add state filter if provided
+        if state:
+            search_criteria["areaCity"] = {"$regex": state, "$options": "i"}
+
+        # Search based on role filter or all collections
+        if role_filter == "supervisors":
+            # Search only in supervisors collection
+            supervisors_cursor = supervisors_collection.find(search_criteria)
+            async for supervisor in supervisors_cursor:
+                supervisor_data = {
+                    "id": str(supervisor["_id"]),
+                    "name": supervisor.get("name", ""),
+                    "email": supervisor.get("email", ""),
+                    "phone": supervisor.get("phone", ""),
+                    "role": "SUPERVISOR",
+                    "areaCity": supervisor.get("areaCity", ""),
+                    "isActive": supervisor.get("isActive", True),
+                    "createdAt": supervisor.get("createdAt"),
+                    "lastLogin": supervisor.get("lastLogin"),
+                    "collection": "supervisors",
+                    "code": supervisor.get("code", "")
+                }
+                all_users.append(supervisor_data)
+                
+        elif role_filter == "guards":
+            # Search only in guards collection  
+            guards_cursor = guards_collection.find(search_criteria)
+            async for guard in guards_cursor:
+                guard_data = {
+                    "id": str(guard["_id"]),
+                    "name": guard.get("name", ""),
+                    "email": guard.get("email", ""),
+                    "phone": guard.get("phone", ""),
+                    "role": "GUARD",
+                    "areaCity": guard.get("areaCity", ""),
+                    "isActive": guard.get("isActive", True),
+                    "createdAt": guard.get("createdAt"),
+                    "lastLogin": guard.get("lastLogin"),
+                    "collection": "guards",
+                    "employeeCode": guard.get("employeeCode", ""),
+                    "supervisorId": guard.get("supervisorId", "")
+                }
+                all_users.append(guard_data)
+                
+        elif role_filter == "admins":
+            # Search only in users collection for ADMIN role
+            admin_criteria = {**search_criteria, "role": "ADMIN"}
+            users_cursor = users_collection.find(admin_criteria)
+            async for user in users_cursor:
+                user_data = {
+                    "id": str(user["_id"]),
+                    "name": user.get("name", ""),
+                    "email": user.get("email", ""),
+                    "phone": user.get("phone", ""),
+                    "role": user.get("role", ""),
+                    "areaCity": user.get("areaCity", ""),
+                    "isActive": user.get("isActive", True),
+                    "createdAt": user.get("createdAt"),
+                    "lastLogin": user.get("lastLogin"),
+                    "collection": "users"
+                }
+                all_users.append(user_data)
+                
+        elif role_filter == "super_admins":
+            # Search only in users collection for SUPER_ADMIN role
+            super_admin_criteria = {**search_criteria, "role": "SUPER_ADMIN"}
+            users_cursor = users_collection.find(super_admin_criteria)
+            async for user in users_cursor:
+                user_data = {
+                    "id": str(user["_id"]),
+                    "name": user.get("name", ""),
+                    "email": user.get("email", ""),
+                    "phone": user.get("phone", ""),
+                    "role": user.get("role", ""),
+                    "areaCity": user.get("areaCity", ""),
+                    "isActive": user.get("isActive", True),
+                    "createdAt": user.get("createdAt"),
+                    "lastLogin": user.get("lastLogin"),
+                    "collection": "users"
+                }
+                all_users.append(user_data)
+        
+        else:
+            # Search all collections when no specific role filter is applied
+            await search_all_collections(users_collection, supervisors_collection, guards_collection, search_criteria, all_users)
+
+        # Sort by creation date (newest first)
+        all_users.sort(key=lambda x: x.get("createdAt") or datetime.min, reverse=True)
+
+        # Format dates for response
+        for user in all_users:
+            if user.get("createdAt"):
+                if hasattr(user["createdAt"], 'isoformat'):
+                    user["createdAt"] = user["createdAt"].isoformat()
+            if user.get("lastLogin"):
+                if hasattr(user["lastLogin"], 'isoformat'):
+                    user["lastLogin"] = user["lastLogin"].isoformat()
+
+        return {
+            "users": all_users,
+            "total": len(all_users),
+            "filters": {
+                "query": query,
+                "state": state
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error searching users: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to search users: {str(e)}"
+        )
+
+
+async def search_all_collections(users_collection, supervisors_collection, guards_collection, search_criteria, all_users):
+    """Helper function to search across all collections"""
+    # Search in users collection (admins and super admins)
+    users_cursor = users_collection.find(search_criteria)
+    async for user in users_cursor:
+        user_data = {
+            "id": str(user["_id"]),
+            "name": user.get("name", ""),
+            "email": user.get("email", ""),
+            "phone": user.get("phone", ""),
+            "role": user.get("role", "ADMIN"),
+            "areaCity": user.get("areaCity", ""),
+            "isActive": user.get("isActive", True),
+            "createdAt": user.get("createdAt"),
+            "lastLogin": user.get("lastLogin"),
+            "collection": "users"
+        }
+        all_users.append(user_data)
+
+    # Search in supervisors collection
+    supervisors_cursor = supervisors_collection.find(search_criteria)
+    async for supervisor in supervisors_cursor:
+        supervisor_data = {
+            "id": str(supervisor["_id"]),
+            "name": supervisor.get("name", ""),
+            "email": supervisor.get("email", ""),
+            "phone": supervisor.get("phone", ""),
+            "role": "SUPERVISOR",
+            "areaCity": supervisor.get("areaCity", ""),
+            "isActive": supervisor.get("isActive", True),
+            "createdAt": supervisor.get("createdAt"),
+            "lastLogin": supervisor.get("lastLogin"),
+            "collection": "supervisors",
+            "code": supervisor.get("code", "")
+        }
+        all_users.append(supervisor_data)
+
+    # Search in guards collection
+    guards_cursor = guards_collection.find(search_criteria)
+    async for guard in guards_cursor:
+        guard_data = {
+            "id": str(guard["_id"]),
+            "name": guard.get("name", ""),
+            "email": guard.get("email", ""),
+            "phone": guard.get("phone", ""),
+            "role": "GUARD",
+            "areaCity": guard.get("areaCity", ""),
+            "isActive": guard.get("isActive", True),
+            "createdAt": guard.get("createdAt"),
+            "lastLogin": guard.get("lastLogin"),
+            "collection": "guards",
+            "employeeCode": guard.get("employeeCode", ""),
+            "supervisorId": guard.get("supervisorId", "")
+        }
+        all_users.append(guard_data)

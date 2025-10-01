@@ -29,7 +29,8 @@ from models import (
     UserCreate, UserResponse, UserRole, SupervisorCreate, SupervisorResponse,
     GuardCreate, GuardResponse, ScanEventResponse, AreaReportRequest,
     ScanReportResponse, SuccessResponse, SystemConfig, SystemConfigUpdate,
-    AdminAddSupervisorRequest, generate_supervisor_email, generate_guard_email
+    AdminAddSupervisorRequest, generate_supervisor_email, generate_guard_email,
+    AdminChangePasswordRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -576,4 +577,101 @@ async def delete_supervisor(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete supervisor: {str(e)}"
+        )
+
+
+# ============================================================================
+# ADMIN: Change Supervisor Password API
+# ============================================================================
+
+@admin_router.put("/change-supervisor-password")
+async def change_supervisor_password(
+    request: AdminChangePasswordRequest,
+    current_admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """
+    ADMIN ONLY: Change password for a supervisor
+    """
+    try:
+        supervisors_collection = get_supervisors_collection()
+        users_collection = get_users_collection()
+
+        if supervisors_collection is None or users_collection is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not available"
+            )
+
+        # Ensure at least one contact method is provided
+        if not request.userEmail and not request.userPhone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Either userEmail or userPhone must be provided"
+            )
+
+        # Build search criteria for supervisor (email OR phone)
+        contact_conditions = []
+        if request.userEmail:
+            contact_conditions.append({"email": request.userEmail})
+        if request.userPhone:
+            contact_conditions.append({"phone": request.userPhone})
+
+        supervisor_search = {"$or": contact_conditions}
+
+        # Find the supervisor by email or phone
+        supervisor = await supervisors_collection.find_one(supervisor_search)
+
+        if not supervisor:
+            contact_info = request.userEmail or request.userPhone
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Supervisor with contact {contact_info} not found"
+            )
+
+        # Hash the new password
+        new_password_hash = jwt_service.hash_password(request.newPassword)
+
+        # Update password in supervisors collection
+        await supervisors_collection.update_one(
+            {"_id": supervisor["_id"]},
+            {
+                "$set": {
+                    "passwordHash": new_password_hash,
+                    "updatedAt": datetime.utcnow()
+                }
+            }
+        )
+
+        # Also update in users collection if supervisor has a user record
+        user_update_criteria = {}
+        if request.userEmail:
+            user_update_criteria["email"] = request.userEmail
+        elif request.userPhone:
+            user_update_criteria["phone"] = request.userPhone
+
+        if user_update_criteria:
+            await users_collection.update_one(
+                user_update_criteria,
+                {
+                    "$set": {
+                        "passwordHash": new_password_hash,
+                        "updatedAt": datetime.utcnow()
+                    }
+                }
+            )
+
+        contact_info = request.userEmail or request.userPhone
+        logger.info(f"Admin {current_admin.get('name', 'Unknown')} changed password for supervisor {contact_info}")
+
+        return {
+            "message": f"Password changed successfully for supervisor {contact_info}"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing supervisor password: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to change supervisor password: {str(e)}"
         )

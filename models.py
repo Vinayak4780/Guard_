@@ -348,6 +348,70 @@ class LoginResponse(BaseModel):
     message: str = "Login successful"
 
 
+# Password Change Models
+class ChangePasswordRequest(BaseModel):
+    """Password change request for self (DEPRECATED - only for reference)"""
+    currentPassword: str = Field(..., description="Current password")
+    newPassword: str = Field(..., min_length=8, description="New password (min 8 characters)")
+
+
+class SuperAdminChangeOwnPasswordRequest(BaseModel):
+    """Super admin password change request with email OTP verification"""
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP sent to email")
+    newPassword: str = Field(..., min_length=8, description="New password (min 8 characters)")
+
+
+class AdminChangePasswordRequest(BaseModel):
+    """Admin password change request for others"""
+    userEmail: Optional[str] = Field("", description="Email of user whose password to change", example="")
+    userPhone: Optional[str] = Field("", description="Phone of user whose password to change", example="")
+    newPassword: str = Field(..., min_length=8, description="New password (min 8 characters)", example="")
+
+    @model_validator(mode='after')
+    def validate_contact_info(self):
+        if not self.userEmail and not self.userPhone:
+            raise ValueError('Either userEmail or userPhone must be provided')
+        return self
+
+
+class SupervisorChangePasswordRequest(BaseModel):
+    """Supervisor password change request for guards"""
+    guardEmail: Optional[str] = Field("", description="Email of guard whose password to change", example="")
+    guardPhone: Optional[str] = Field("", description="Phone of guard whose password to change", example="")
+    newPassword: str = Field(..., min_length=8, description="New password (min 8 characters)", example="")
+
+    @model_validator(mode='after')
+    def validate_contact_info(self):
+        if not self.guardEmail and not self.guardPhone:
+            raise ValueError('Either guardEmail or guardPhone must be provided')
+        return self
+
+
+class SuperAdminChangePasswordRequest(BaseModel):
+    """Super admin password change request for any user"""
+    userEmail: Optional[str] = Field("", description="Email of user whose password to change", example="")
+    userPhone: Optional[str] = Field("", description="Phone of user whose password to change", example="")
+    newPassword: str = Field(..., min_length=8, description="New password (min 8 characters)", example="")
+
+    @model_validator(mode='after')
+    def validate_contact_info(self):
+        if not self.userEmail and not self.userPhone:
+            raise ValueError('Either userEmail or userPhone must be provided')
+        return self
+
+
+class UserSearchRequest(BaseModel):
+    """User search request"""
+    query: Optional[str] = Field(None, description="Search by name, email, or phone - use 'fieldofficer' to search supervisors, 'supervisor' to search guards")
+    state: Optional[str] = Field(None, description="Filter by state")
+
+
+class UserSearchResponse(BaseModel):
+    """User search response"""
+    users: List[UserResponse]
+    total: int
+
+
 # QR Management Models
 class QRGenerateRequest(BaseModel):
     """QR generation/update request for supervisors"""
@@ -798,14 +862,16 @@ class SupervisorAddGuardRequest(BaseModel):
     """
     Request model for adding a guard by a supervisor
     """
-    name: str = Field(..., min_length=2, max_length=100, description="Guard's full name")
+    name: str = Field(..., min_length=2, max_length=100, description="Guard's full name", example="")
     email: Optional[str] = Field(
         "",
-        description="Guard's email address (optional, default empty, no validation if empty)"
+        description="Guard's email address (optional, default empty, no validation if empty)",
+        example=""
     )
     phone: Optional[str] = Field(
         "",
-        description="Guard's phone number (optional, must be 10 digits if provided, default empty)"
+        description="Guard's phone number (optional, must be 10 digits if provided, default empty)",
+        example=""
     )
 
     @field_validator("phone")
@@ -817,7 +883,14 @@ class SupervisorAddGuardRequest(BaseModel):
                 raise ValueError("Phone number must be exactly 10 digits")
         return v
 
-    password: str = Field(..., min_length=8, description="Password for the guard (min 8 characters)")
+    @model_validator(mode='after')
+    def validate_contact_info(self):
+        """Ensure at least one of email or phone is provided"""
+        if not self.email and not self.phone:
+            raise ValueError("Either email or phone number must be provided")
+        return self
+
+    password: str = Field(..., min_length=8, description="Password for the guard (min 8 characters)", example="")
 
 
 # ============================================================================

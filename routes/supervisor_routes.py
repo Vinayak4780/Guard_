@@ -21,7 +21,7 @@ from database import (
     get_supervisors_collection, get_guards_collection, get_qr_locations_collection,
     get_scan_events_collection, get_users_collection
 )
-from models import SupervisorAddGuardRequest, UserRole
+from models import SupervisorAddGuardRequest, UserRole, SupervisorChangePasswordRequest
 from config import settings
 
 # Configure logging
@@ -621,21 +621,26 @@ async def add_guard(
         user_id = f"user_{guard_count + 1}"  # Example: user_1
 
         # Check if a guard with the same email or phone already exists
-        existing_guard = await guards_collection.find_one({
-            "$or": [
-                {"email": guard_data.email},
-                {"phone": guard_data.phone}
-            ]
-        })
+        # Only check non-empty values to avoid matching empty strings
+        duplicate_conditions = []
+        if guard_data.email:
+            duplicate_conditions.append({"email": guard_data.email})
+        if guard_data.phone:
+            duplicate_conditions.append({"phone": guard_data.phone})
+        
+        if duplicate_conditions:
+            existing_guard = await guards_collection.find_one({
+                "$or": duplicate_conditions
+            })
+            
+            if existing_guard:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A guard with the same email or phone already exists."
+                )
 
-        if existing_guard:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A guard with the same email or phone already exists."
-            )
-
-        # Ensure email ends with '@gmail.com'
-        if not guard_data.email.endswith("@gmail.com"):
+        # Process email only if provided
+        if guard_data.email and not guard_data.email.endswith("@gmail.com"):
             guard_data.email = guard_data.email.split("@")[0] + "@gmail.com"
 
         # Create guard record
@@ -797,6 +802,118 @@ async def delete_guard(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete guard: {str(e)}"
+        )
+
+
+# ============================================================================
+# SUPERVISOR: Change Guard Password API
+# ============================================================================
+
+@supervisor_router.put("/change-guard-password")
+async def change_guard_password(
+    request: SupervisorChangePasswordRequest,
+    current_supervisor: Dict[str, Any] = Depends(get_current_supervisor)
+):
+    """
+    SUPERVISOR ONLY: Change password for a guard under their supervision
+    """
+    try:
+        guards_collection = get_guards_collection()
+        users_collection = get_users_collection()
+
+        if guards_collection is None or users_collection is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not available"
+            )
+
+        supervisor_id = current_supervisor["_id"]
+
+        # Ensure at least one contact method is provided
+        if not request.guardEmail and not request.guardPhone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Either guardEmail or guardPhone must be provided"
+            )
+
+        # Build search criteria for guard
+        guard_search = {
+            "$and": [
+                {
+                    "$or": [
+                        {"supervisorId": str(supervisor_id)},
+                        {"supervisorId": supervisor_id}
+                    ]
+                }
+            ]
+        }
+
+        # Add email or phone condition
+        contact_conditions = []
+        if request.guardEmail:
+            contact_conditions.append({"email": request.guardEmail})
+        if request.guardPhone:
+            contact_conditions.append({"phone": request.guardPhone})
+        
+        # Add contact filter (we know at least one exists due to validation above)
+        guard_search["$and"].append({"$or": contact_conditions})
+
+        # Find the guard and verify they're under this supervisor
+        guard = await guards_collection.find_one(guard_search)
+
+        if not guard:
+            contact_info = request.guardEmail or request.guardPhone
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Guard with contact {contact_info} not found or not under your supervision"
+            )
+
+        # Hash the new password
+        new_password_hash = jwt_service.hash_password(request.newPassword)
+
+        # Update password in guards collection
+        await guards_collection.update_one(
+            {"_id": guard["_id"]},
+            {
+                "$set": {
+                    "passwordHash": new_password_hash,
+                    "updatedAt": datetime.utcnow()
+                }
+            }
+        )
+
+        # Also update in users collection if guard has a user record
+        user_update_criteria = {}
+        if request.guardEmail:
+            user_update_criteria["email"] = request.guardEmail
+        elif request.guardPhone:
+            user_update_criteria["phone"] = request.guardPhone
+
+        if user_update_criteria:
+            await users_collection.update_one(
+                user_update_criteria,
+                {
+                    "$set": {
+                        "passwordHash": new_password_hash,
+                        "updatedAt": datetime.utcnow()
+                    }
+                }
+            )
+
+        contact_info = request.guardEmail or request.guardPhone
+        logger.info(f"Supervisor {current_supervisor.get('name', 'Unknown')} changed password for guard {contact_info}")
+
+        return {
+            "message": f"Password changed successfully for guard {contact_info}"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing guard password: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to change guard password: {str(e)}"
         )
 
 
