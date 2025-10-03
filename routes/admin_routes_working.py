@@ -371,14 +371,18 @@ async def add_supervisor(
             supervisor_data_record["phone"] = supervisor_data.phone.strip()
 
         # Generate an incrementing id like sp1, sp2, etc.
-        last_supervisor = await supervisors_collection.find_one(
-            sort=[("id", -1)]  # Sort by id in descending order
-        )
-        if last_supervisor and "id" in last_supervisor:
-            last_id = int(last_supervisor["id"].replace("sp", ""))
-            new_id = f"sp{last_id + 1}"
-        else:
-            new_id = "sp1"
+        # Count total supervisors to get the next sequential number
+        supervisor_count = await supervisors_collection.count_documents({})
+        new_id_number = supervisor_count + 1
+        
+        # Generate unique code by checking if it exists
+        while True:
+            new_id = f"sp{new_id_number}"
+            # Check if this code already exists
+            existing_code = await supervisors_collection.find_one({"code": new_id})
+            if not existing_code:
+                break
+            new_id_number += 1
 
         # Add the new id and required fields to the supervisor record
         supervisor_data_record["id"] = new_id
