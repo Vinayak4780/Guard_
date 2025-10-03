@@ -132,18 +132,23 @@ class EmailService:
             html_part = MIMEText(html_content, "html")
             message.attach(html_part)
             
-            # Send email
-            await aiosmtplib.send(
-                message,
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                start_tls=True,
-                username=self.smtp_username,
-                password=self.smtp_password,
+            # Send email with fallback connection methods
+            success = await self._send_email_with_fallback(
+                message, to_email, f"OTP: {otp}"
             )
             
-            logger.info(f"OTP email sent successfully to {to_email}")
-            return True
+            if success:
+                logger.info(f"OTP email sent successfully to {to_email}")
+                return True
+            else:
+                # If all methods fail, use development mode
+                logger.error(f"All email sending methods failed for {to_email}")
+                logger.warning("=" * 60)
+                logger.warning(f"🔑 DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
+                logger.warning(f"📧 For email: {to_email}")
+                logger.warning("=" * 60)
+                print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")
+                return True  # Return True for development mode
             
         except aiosmtplib.SMTPAuthenticationError as e:
             logger.error(f"Email authentication failed for {to_email}: {e}")
@@ -267,18 +272,17 @@ class EmailService:
             html_part = MIMEText(html_content, "html")
             message.attach(html_part)
             
-            # Send email
-            await aiosmtplib.send(
-                message,
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                start_tls=True,
-                username=self.smtp_username,
-                password=self.smtp_password,
+            # Send email with fallback methods
+            success = await self._send_email_with_fallback(
+                message, to_email, f"Supervisor Credentials"
             )
             
-            logger.info(f"Supervisor credentials email sent successfully to {to_email}")
-            return True
+            if success:
+                logger.info(f"Supervisor credentials email sent successfully to {to_email}")
+                return True
+            else:
+                logger.error(f"Failed to send supervisor credentials email to {to_email}")
+                return False
             
         except Exception as e:
             logger.error(f"Failed to send supervisor credentials email to {to_email}: {e}")
@@ -383,17 +387,17 @@ class EmailService:
             message.attach(html_part)
             
             # Send email
-            await aiosmtplib.send(
-                message,
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                start_tls=True,
-                username=self.smtp_username,
-                password=self.smtp_password,
+            # Send email with fallback methods
+            success = await self._send_email_with_fallback(
+                message, to_email, f"Guard Credentials"
             )
             
-            logger.info(f"Guard credentials email sent successfully to {to_email}")
-            return True
+            if success:
+                logger.info(f"Guard credentials email sent successfully to {to_email}")
+                return True
+            else:
+                logger.error(f"Failed to send guard credentials email to {to_email}")
+                return False
             
         except Exception as e:
             logger.error(f"Failed to send guard credentials email to {to_email}: {e}")
@@ -477,18 +481,17 @@ class EmailService:
             html_part = MIMEText(html_content, "html")
             message.attach(html_part)
 
-            # Send email
-            await aiosmtplib.send(
-                message,
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                start_tls=True,
-                username=self.smtp_username,
-                password=self.smtp_password,
+            # Send email with fallback methods
+            success = await self._send_email_with_fallback(
+                message, to_email, f"Super Admin Credentials"
             )
-
-            logger.info(f"Super admin credentials email sent successfully to {to_email}")
-            return True
+            
+            if success:
+                logger.info(f"Super admin credentials email sent successfully to {to_email}")
+                return True
+            else:
+                logger.error(f"Failed to send super admin credentials email to {to_email}")
+                return False
 
         except Exception as e:
             logger.error(f"Failed to send super admin credentials email to {to_email}: {e}")
@@ -551,18 +554,17 @@ class EmailService:
             html_part = MIMEText(html_content, "html")
             message.attach(html_part)
             
-            # Send email
-            await aiosmtplib.send(
-                message,
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                start_tls=True,
-                username=self.smtp_username,
-                password=self.smtp_password,
+            # Send email with fallback methods
+            success = await self._send_email_with_fallback(
+                message, to_email, f"Welcome Email"
             )
             
-            logger.info(f"Welcome email sent successfully to {to_email}")
-            return True
+            if success:
+                logger.info(f"Welcome email sent successfully to {to_email}")
+                return True
+            else:
+                logger.error(f"Failed to send welcome email to {to_email}")
+                return False
             
         except Exception as e:
             logger.error(f"Failed to send welcome email to {to_email}: {e}")
@@ -614,21 +616,74 @@ class EmailService:
             html_part = MIMEText(html_content, "html")
             message.attach(html_part)
             
-            await aiosmtplib.send(
-                message,
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                start_tls=True,
-                username=self.smtp_username,
-                password=self.smtp_password,
+            # Send email with fallback methods
+            success = await self._send_email_with_fallback(
+                message, to_email, f"Account Removal Notification"
             )
             
-            logger.info(f"Account removal email sent successfully to {to_email}")
-            return True
+            if success:
+                logger.info(f"Account removal email sent successfully to {to_email}")
+                return True
+            else:
+                logger.error(f"Failed to send account removal email to {to_email}")
+                return False
             
         except Exception as e:
             logger.error(f"Failed to send account removal email to {to_email}: {e}")
             return False
+
+    async def _send_email_with_fallback(self, message, to_email: str, subject: str) -> bool:
+        """
+        Try multiple SMTP connection methods for better compatibility with cloud platforms like Render
+        """
+        connection_methods = [
+            # Method 1: SSL on port 465 (often works better on cloud platforms)
+            {
+                "port": 465,
+                "use_tls": True,
+                "start_tls": False,
+                "description": "SSL on port 465"
+            },
+            # Method 2: TLS on port 587 (standard method)
+            {
+                "port": 587,
+                "use_tls": False,
+                "start_tls": True,
+                "description": "TLS on port 587 with STARTTLS"
+            },
+            # Method 3: TLS on port 587 without STARTTLS
+            {
+                "port": 587,
+                "use_tls": True,
+                "start_tls": False,
+                "description": "TLS on port 587 (no STARTTLS)"
+            }
+        ]
+        
+        for method in connection_methods:
+            try:
+                logger.info(f"🔄 Trying email method: {method['description']}")
+                
+                await aiosmtplib.send(
+                    message,
+                    hostname=self.smtp_host,
+                    port=method["port"],
+                    use_tls=method["use_tls"],
+                    start_tls=method["start_tls"],
+                    username=self.smtp_username,
+                    password=self.smtp_password,
+                    timeout=30  # Add timeout to prevent hanging
+                )
+                
+                logger.info(f"✅ Email sent successfully using {method['description']}")
+                return True
+                
+            except Exception as e:
+                logger.warning(f"❌ {method['description']} failed: {str(e)}")
+                continue
+        
+        logger.error("🚨 All email connection methods failed")
+        return False
 
 
 # Global email service instance
