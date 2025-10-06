@@ -333,3 +333,4 @@ async def scan_qr_code(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process QR scan"
         )
+

@@ -1,0 +1,323 @@
+{
+  "exportTimestamp": "2025-10-06T11:23:21.845509",
+  "statistics": {
+    "totalUsers": 6,
+    "totalSupervisors": 10,
+    "totalGuards": 12,
+    "scansToday": 0
+  },
+  "users": [
+    {
+      "id": "68ca96697eeeafad1052780b",
+      "email": "admin@lh.io.in",
+      "name": "System Administrator",
+      "role": "ADMIN",
+      "phone": "",
+      "createdAt": "2025-09-17T11:07:21.707000",
+      "isActive": true
+    },
+    {
+      "id": "68d8f1f25f168af4887e702c",
+      "email": "vi.nayak4780@gmail.com",
+      "name": "Super Administrator",
+      "role": "SUPER_ADMIN",
+      "phone": "",
+      "createdAt": "2025-09-28T08:29:38.166000",
+      "isActive": true
+    },
+    {
+      "id": "68d8f493ff355e204c9c2221",
+      "email": "hgptyradl@gmail.com",
+      "name": "State Admin",
+      "role": "ADMIN",
+      "phone": "5246258965",
+      "createdAt": "2025-09-28T08:40:51.339000",
+      "isActive": true
+    },
+    {
+      "id": "68dea68179e1f70dc95d276f",
+      "email": "",
+      "name": "State Admin",
+      "role": "ADMIN",
+      "phone": "1234567890",
+      "createdAt": "2025-10-02T16:21:21.589000",
+      "isActive": true
+    },
+    {
+      "id": "68deb2cf0a786ad0a82088ee",
+      "email": "web.abdussami@gmail.com",
+      "name": "Admin123",
+      "role": "SUPERVISOR",
+      "phone": "1122334455",
+      "createdAt": "2025-10-02T17:13:51.284000",
+      "isActive": true
+    },
+    {
+      "id": "68deb3dd0a786ad0a82088f0",
+      "email": "talk.abdussami@gmail.com",
+      "name": "Test",
+      "role": "ADMIN",
+      "phone": "1234509876",
+      "createdAt": "2025-10-02T17:18:21.793000",
+      "isActive": true
+    }
+  ],
+  "supervisors": [
+    {
+      "id": "68ca8dcfe2048f7fc4ef5405",
+      "email": "fulltest1758105027@lh.io.in",
+      "name": "Full Test Supervisor 1758105027",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "9876505027",
+      "createdAt": "2025-09-17T10:30:39.306000",
+      "isActive": true,
+      "lastLogin": "2025-09-17T10:30:42.067000"
+    },
+    {
+      "id": "68d37ebfa952d23440af9eca",
+      "email": "",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "8802764380",
+      "createdAt": "2025-09-24T05:16:46.846000",
+      "isActive": true,
+      "lastLogin": "2025-10-03T04:22:08.750000"
+    },
+    {
+      "id": "68d4eb3e893183a371a7f156",
+      "email": "djfdh@gmail.com",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "",
+      "createdAt": "2025-09-25T07:11:58.218000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d4ebfb893183a371a7f157",
+      "email": "djfh@gmail.com",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "6666666666",
+      "createdAt": "2025-09-25T07:15:07.758000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d4ed06915c1403242ca6a0",
+      "email": "",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "1111111111",
+      "createdAt": "2025-09-25T07:19:34.379000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d4ed24915c1403242ca6a1",
+      "email": "",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "1234567897",
+      "createdAt": "2025-09-25T07:20:04.086000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4df8de37933e03fedc9c",
+      "email": "hfasdasdhasd@gmail.com",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "",
+      "createdAt": "2025-10-01T15:51:20.615000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4e07de37933e03fedc9d",
+      "email": "hfasdadhasd@gmail.com",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "8585858585",
+      "createdAt": "2025-10-01T15:51:34.970000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4e17de37933e03fedc9e",
+      "email": "",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "8585898585",
+      "createdAt": "2025-10-01T15:51:51.892000",
+      "isActive": true,
+      "lastLogin": "2025-10-02T17:39:25.078000"
+    },
+    {
+      "id": "68df5039ed4c484894f6c944",
+      "email": "",
+      "name": "Vinayak Gupta",
+      "supervisorCode": "",
+      "assignedAreas": [],
+      "phone": "1111111122",
+      "createdAt": "2025-10-03T04:25:29.628000",
+      "isActive": true,
+      "lastLogin": ""
+    }
+  ],
+  "guards": [
+    {
+      "id": "68d223d49229b79b670ef9fe",
+      "email": "dhasman@123",
+      "name": "string",
+      "guardCode": "",
+      "phone": "9625785546",
+      "supervisorId": "68ca7ee43c18f09672af861b",
+      "assignedSites": [],
+      "createdAt": "2025-09-23T04:36:36.080000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d223f29229b79b670ef9ff",
+      "email": "dhasman@gmail.com",
+      "name": "strings",
+      "guardCode": "",
+      "phone": "9625785547",
+      "supervisorId": "68ca7ee43c18f09672af861b",
+      "assignedSites": [],
+      "createdAt": "2025-09-23T04:37:06.984000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d224c89229b79b670efa00",
+      "email": "dhasman@gma",
+      "name": "strings",
+      "guardCode": "",
+      "phone": "9625785547",
+      "supervisorId": "68ca7ee43c18f09672af861b",
+      "assignedSites": [],
+      "createdAt": "2025-09-23T04:40:40.820000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d225a09229b79b670efa01",
+      "email": "dhasman@gma",
+      "name": "strings",
+      "guardCode": "",
+      "phone": "9625785547",
+      "supervisorId": "68ca7ee43c18f09672af861b",
+      "assignedSites": [],
+      "createdAt": "2025-09-23T04:44:16.182000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d225ccbcde448e50ff6e4c",
+      "email": "dhasman@gmadfd",
+      "name": "strings",
+      "guardCode": "",
+      "phone": "9625785534",
+      "supervisorId": "68ca7ee43c18f09672af861b",
+      "assignedSites": [],
+      "createdAt": "2025-09-23T04:45:00.356000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68d22671bebf5c7a98d5c72e",
+      "email": "dkjfaosidhgsdhasdh@gmail.com",
+      "name": "string",
+      "guardCode": "",
+      "phone": "",
+      "supervisorId": "68ca7ee43c18f09672af861b",
+      "assignedSites": [],
+      "createdAt": "2025-09-23T04:47:45.330000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4c26de37933e03fedc9a",
+      "email": "@gmail.com",
+      "name": "string",
+      "guardCode": "",
+      "phone": "1234567890",
+      "supervisorId": "68d37ebfa952d23440af9eca",
+      "assignedSites": [],
+      "createdAt": "2025-10-01T15:43:34.077000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4cb6de37933e03fedc9b",
+      "email": "vi.nayak7780@gmail.com",
+      "name": "strings",
+      "guardCode": "",
+      "phone": "5555555555",
+      "supervisorId": "68d37ebfa952d23440af9eca",
+      "assignedSites": [],
+      "createdAt": "2025-10-01T15:45:58.404000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4f20892f1cb3ec091b58",
+      "email": "vi.789@gmail.com",
+      "name": "strindfdfg",
+      "guardCode": "",
+      "phone": "",
+      "supervisorId": "68d37ebfa952d23440af9eca",
+      "assignedSites": [],
+      "createdAt": "2025-10-01T15:56:16.916000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4fab892f1cb3ec091b59",
+      "email": "",
+      "name": "Test2",
+      "guardCode": "",
+      "phone": "2222222222",
+      "supervisorId": "68d37ebfa952d23440af9eca",
+      "assignedSites": [],
+      "createdAt": "2025-10-01T15:58:35.731000",
+      "isActive": true,
+      "lastLogin": ""
+    },
+    {
+      "id": "68dd4fc4892f1cb3ec091b5a",
+      "email": "Test1@gmail.com",
+      "name": "Test1",
+      "guardCode": "",
+      "phone": "",
+      "supervisorId": "68d37ebfa952d23440af9eca",
+      "assignedSites": [],
+      "createdAt": "2025-10-01T15:59:00.104000",
+      "isActive": true,
+      "lastLogin": "2025-10-01T16:10:01.256000"
+    },
+    {
+      "id": "68deb8fd0a786ad0a82088f1",
+      "email": "",
+      "name": "Testing Gaurd",
+      "guardCode": "",
+      "phone": "9266246042",
+      "supervisorId": "68dd4e17de37933e03fedc9e",
+      "assignedSites": [],
+      "createdAt": "2025-10-02T17:40:13.100000",
+      "isActive": true,
+      "lastLogin": ""
+    }
+  ]
+}

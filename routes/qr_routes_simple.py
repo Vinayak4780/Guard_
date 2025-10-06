@@ -163,7 +163,8 @@ async def create_qr_code(
 @qr_router.get("/list")
 async def list_qr_codes(
     current_supervisor: Dict[str, Any] = Depends(get_current_supervisor),
-    site: Optional[str] = Query(None, description="Filter by site name")
+    site: Optional[str] = Query(None, description="Filter by site name"),
+    format: Optional[str] = Query("json", description="Response format: 'json' or 'html'")
 ):
     """
     List all QR codes created by the current supervisor for a specific site.
@@ -188,10 +189,39 @@ async def list_qr_codes(
 
         formatted_qrs = []
         for qr in qr_locations:
+            # Generate QR code image with better quality
+            qr_content = f"{qr.get('site', '')}:{qr.get('post', '')}:{str(qr['_id'])}"
+            
+            import qrcode, io, base64
+            from PIL import Image
+            
+            # Create QR code with better settings
+            qr_code = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr_code.add_data(qr_content)
+            qr_code.make(fit=True)
+            
+            # Create image with white background
+            qr_img = qr_code.make_image(fill_color="black", back_color="white")
+            
+            # Convert to bytes
+            buf = io.BytesIO()
+            qr_img.save(buf, format="PNG")
+            buf.seek(0)
+            
+            # Convert to base64 for JSON response
+            qr_image_base64 = base64.b64encode(buf.getvalue()).decode()
+            
             qr_data = {
                 "qr_id": str(qr["_id"]),
                 "site": qr.get("site", ""),
                 "post": qr.get("post", ""),
+                "qr_content": qr_content,
+                "qr_image": f"data:image/png;base64,{qr_image_base64}",
                 "created_at": qr.get("createdAt").isoformat() if qr.get("createdAt") else None,
                 "updated_at": qr.get("updatedAt").isoformat() if qr.get("updatedAt") else None
             }
@@ -201,6 +231,53 @@ async def list_qr_codes(
         total_count = len(formatted_qrs)
         filter_message = f" for site '{site}'" if site else ""
 
+        # Return HTML format if requested
+        if format.lower() == "html":
+            from fastapi.responses import HTMLResponse
+            
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>QR Codes List</title>
+                <style>
+                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                    .qr-item {{ border: 1px solid #ddd; margin: 20px 0; padding: 15px; border-radius: 8px; }}
+                    .qr-info {{ display: inline-block; vertical-align: top; margin-left: 20px; }}
+                    img {{ border: 2px solid #333; }}
+                    h1 {{ color: #333; }}
+                    .total {{ background: #f0f0f0; padding: 10px; border-radius: 5px; margin-bottom: 20px; }}
+                </style>
+            </head>
+            <body>
+                <h1>QR Codes List</h1>
+                <div class="total">
+                    <strong>Found {total_count} QR codes{filter_message}</strong>
+                </div>
+            """
+            
+            for qr in formatted_qrs:
+                html_content += f"""
+                <div class="qr-item">
+                    <img src="{qr['qr_image']}" alt="QR Code" width="200" height="200">
+                    <div class="qr-info">
+                        <h3>{qr['site']} - {qr['post']}</h3>
+                        <p><strong>QR ID:</strong> {qr['qr_id']}</p>
+                        <p><strong>Content:</strong> {qr['qr_content']}</p>
+                        <p><strong>Created:</strong> {qr['created_at']}</p>
+                        <p><strong>Updated:</strong> {qr['updated_at']}</p>
+                    </div>
+                </div>
+                """
+            
+            html_content += """
+            </body>
+            </html>
+            """
+            
+            return HTMLResponse(content=html_content)
+
+        # Return JSON format (default)
         return {
             "qr_codes": formatted_qrs,
             "total": total_count,

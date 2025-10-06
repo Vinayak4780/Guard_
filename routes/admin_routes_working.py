@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import logging
 import os
 import io
+import json
 from bson import ObjectId
 
 # Import services and dependencies
@@ -42,7 +43,7 @@ admin_router = APIRouter()
 @admin_router.get("/dashboard")
 async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_current_admin)):
     """
-    Admin dashboard with system statistics
+    Admin dashboard with system statistics and detailed user data export
     """
     try:
         users_collection = get_users_collection()
@@ -61,8 +62,8 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
                 detail="Database not available"
             )
         
-        # Get basic counts
-        total_users = await users_collection.count_documents({})
+        # Get basic counts (exclude SUPER_ADMIN from user count)
+        total_users = await users_collection.count_documents({"role": {"$ne": "SUPER_ADMIN"}})
         total_supervisors = await supervisors_collection.count_documents({})
         total_guards = await guards_collection.count_documents({})
         
@@ -72,6 +73,56 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
             "scannedAt": {"$gte": today_start}
         })
         
+        # Get supervisor scans today
+        supervisor_scans_today = await scan_events_collection.count_documents({
+            "scannedAt": {"$gte": today_start},
+            "scannedBy": "SUPERVISOR"
+        })
+        
+        # Get guard scans today (including legacy records without scannedBy field)
+        guard_scans_today = await scan_events_collection.count_documents({
+            "scannedAt": {"$gte": today_start},
+            "$or": [
+                {"scannedBy": "GUARD"},
+                {"scannedBy": {"$exists": False}}  # Legacy records
+            ]
+        })
+        
+        # Get basic lists with simple information
+        users_list = []
+        supervisors_list = []
+        guards_list = []
+        
+        # Get all users with basic details (exclude SUPER_ADMIN, only admins get area field)
+        users_cursor = users_collection.find({"role": {"$ne": "SUPER_ADMIN"}})
+        async for user in users_cursor:
+            user_data = {
+                "name": user.get("name", ""),
+                "contact": user.get("email", "") or user.get("phone", "")
+            }
+            # Only show area for admin users
+            if user.get("role") == "ADMIN":
+                user_data["area"] = user.get("state", "N/A")
+            users_list.append(user_data)
+        
+        # Get all supervisors with basic details (no area field)
+        supervisors_cursor = supervisors_collection.find({})
+        async for supervisor in supervisors_cursor:
+            supervisor_data = {
+                "name": supervisor.get("name", ""),
+                "contact": supervisor.get("email", "") or supervisor.get("phone", "")
+            }
+            supervisors_list.append(supervisor_data)
+        
+        # Get all guards with basic details (no area field)
+        guards_cursor = guards_collection.find({})
+        async for guard in guards_cursor:
+            guard_data = {
+                "name": guard.get("name", ""),
+                "contact": guard.get("email", "") or guard.get("phone", "")
+            }
+            guards_list.append(guard_data)
+        
         # Get recent activity with improved data display
         recent_scans_cursor = scan_events_collection.find({}) \
             .sort("scannedAt", -1) \
@@ -79,25 +130,32 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
         
         recent_scans = []
         async for scan in recent_scans_cursor:
-            # Get organization and site information
-            organization = scan.get("organization", "Unknown Organization")
+            # Get site information (removed organization field)
             site = scan.get("site", "Unknown Site") 
-            guard_name = scan.get("guardName", scan.get("guardEmail", "Unknown Guard"))
+            scanned_by = scan.get("scannedBy", "GUARD")  # Default to GUARD for legacy records
+            
+            if scanned_by == "SUPERVISOR":
+                scanner_name = scan.get("supervisorName", scan.get("supervisorEmail", "Unknown Supervisor"))
+                scanner_id = str(scan.get("supervisorId", ""))
+                scanner_email = scan.get("supervisorEmail", "")
+            else:
+                scanner_name = scan.get("guardName", scan.get("guardEmail", "Unknown Guard"))
+                scanner_id = str(scan.get("guardId", ""))
+                scanner_email = scan.get("guardEmail", "")
             
             scan_data = {
                 "_id": str(scan["_id"]),
-                "guardId": str(scan.get("guardId", "")),
-                "guardEmail": scan.get("guardEmail", ""),
-                "guardName": guard_name,
-                "organization": organization,
+                "scannerId": scanner_id,
+                "scannerEmail": scanner_email,
+                "scannerName": scanner_name,
+                "scannerType": scanned_by,
                 "site": site,
-                "qrId": str(scan.get("qrId", "")),
+                "post": scan.get("post", ""),
+                "qrType": scan.get("qrType", "REGULAR"),
                 "scannedAt": scan.get("scannedAt"),
                 "deviceLat": scan.get("deviceLat"),
                 "deviceLng": scan.get("deviceLng"),
-                "address": scan.get("address", ""),
-                "timestampIST": scan.get("timestampIST", ""),
-                "supervisorId": str(scan.get("supervisorId", "")) if scan.get("supervisorId") else None
+                "address": scan.get("address", "")
             }
             recent_scans.append(scan_data)
         
@@ -109,16 +167,24 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
             "role": current_admin.get("role", "ADMIN")
         }
         
-        return {
+        # Include simplified user data directly in response
+        response_data = {
             "stats": {
                 "totalUsers": total_users,
                 "totalSupervisors": total_supervisors,
                 "totalGuards": total_guards,
-                "scansToday": total_scans_today
+                "scansToday": total_scans_today,
+                "supervisorScansToday": supervisor_scans_today,
+                "guardScansToday": guard_scans_today
             },
             "recentActivity": recent_scans,
-            "adminInfo": admin_info
+            "adminInfo": admin_info,
+            "users": users_list,
+            "supervisors": supervisors_list,
+            "guards": guards_list
         }
+        
+        return response_data
         
     except HTTPException:
         raise
@@ -184,24 +250,15 @@ async def get_area_wise_excel_reports(
         for scan in scans:
             # Fetch guard details using guardId
             guard_id = scan.get("guardId")
-            guard_email = "Unknown Email"
-            guard_phone = "Unknown Phone"
 
             if guard_id:
                 try:
                     guard_id = ObjectId(guard_id)
                     guard = await guards_collection.find_one({"_id": guard_id})
-                    if guard:
-                        guard_email = guard.get("email") if guard and guard.get("email") else None
-                        guard_phone = guard.get("phone") if guard and guard.get("phone") else "Unknown Phone"
                 except Exception as e:
                     logger.error(f"Error fetching guard details for guardId {guard_id}: {e}")
 
-            # Use guard email if available, otherwise fallback to phone number
-            guard_contact = guard_email if guard_email else guard_phone
-
             area_name = scan.get("formatted_address") or scan.get("address", "Unknown Area")
-            organization = scan.get("organization", "Unknown Organization")
             site_name = scan.get("site", "Unknown Site")
             guard_name = scan.get("guardName", "Unknown Guard")
 
@@ -210,10 +267,8 @@ async def get_area_wise_excel_reports(
 
             area_data[area_name].append({
                 "timestamp": scan.get("scannedAt"),
-                "organization": organization,
                 "site": site_name,
                 "guard_name": guard_name,
-                "guard_contact": guard_contact,  # Added contact info
                 "address": area_name,
                 "coordinates": {
                     "lat": scan.get("deviceLat"),
@@ -234,7 +289,6 @@ async def get_area_wise_excel_reports(
                     "Area": area_name,
                     "Site": scan_data["site"],
                     "Guard Name": scan_data["guard_name"],
-                    "Guard Contact": scan_data["guard_contact"],
                     "Timestamp (IST)": format_excel_datetime(scan_data["timestamp"]),
                     "Latitude": scan_data["coordinates"]["lat"],
                     "Longitude": scan_data["coordinates"]["lng"],
@@ -371,14 +425,18 @@ async def add_supervisor(
             supervisor_data_record["phone"] = supervisor_data.phone.strip()
 
         # Generate an incrementing id like sp1, sp2, etc.
-        last_supervisor = await supervisors_collection.find_one(
-            sort=[("id", -1)]  # Sort by id in descending order
-        )
-        if last_supervisor and "id" in last_supervisor:
-            last_id = int(last_supervisor["id"].replace("sp", ""))
-            new_id = f"sp{last_id + 1}"
-        else:
-            new_id = "sp1"
+        # Count total supervisors to get the next sequential number
+        supervisor_count = await supervisors_collection.count_documents({})
+        new_id_number = supervisor_count + 1
+        
+        # Generate unique code by checking if it exists
+        while True:
+            new_id = f"sp{new_id_number}"
+            # Check if this code already exists
+            existing_code = await supervisors_collection.find_one({"code": new_id})
+            if not existing_code:
+                break
+            new_id_number += 1
 
         # Add the new id and required fields to the supervisor record
         supervisor_data_record["id"] = new_id
@@ -494,22 +552,13 @@ async def list_supervisors(
 async def delete_supervisor(
     name: str,
     area: str,
-    email: Optional[str] = None,
-    phone: Optional[str] = None,
     current_admin: Dict[str, Any] = Depends(get_current_admin)
 ):
     """
-    ADMIN ONLY: Delete a supervisor from the system by name, area and (email OR phone)
+    ADMIN ONLY: Delete a supervisor from the system by name and area
     Removes supervisor from the supervisors collection only
     """
     try:
-        # Validate that either email or phone is provided
-        if not email and not phone:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Either email or phone number must be provided"
-            )
-
         supervisors_collection = get_supervisors_collection()
 
         if supervisors_collection is None:
@@ -521,37 +570,19 @@ async def delete_supervisor(
         # Clean inputs
         name = name.strip()
         area = area.strip()
-        contact_value = email.strip() if email else phone.strip()
-        contact_type = "email" if email else "phone"
-
         # Build search criteria
         search_criteria = {
             "name": name,
-            "areaCity": area  # Corrected to match the database field name
+            "state": area  # Using the correct database field name
         }
 
-        if email:
-            search_criteria["email"] = email
-
-        # For phone search, check both phoneNumber and phone_number fields
-        if phone:
-            phone_digits = ''.join(filter(str.isdigit, phone))
-            search_criteria = {
-                "name": name,
-                "areaCity": area,  # Corrected to match the database field name
-                "$or": [
-                    {"phone": phone},
-                    {"phone": phone_digits}
-                ]
-            }
-
-        # Find supervisor by name, area and contact
+        # Find supervisor by name and area
         supervisor = await supervisors_collection.find_one(search_criteria)
 
         if not supervisor:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Supervisor with name '{name}', area '{area}', and {contact_type} '{contact_value}' not found"
+                detail=f"Supervisor with name '{name}' in area '{area}' not found"
             )
 
         supervisor_id = str(supervisor["_id"])
@@ -559,15 +590,13 @@ async def delete_supervisor(
         # Delete from supervisors collection
         supervisor_result = await supervisors_collection.delete_one({"_id": supervisor["_id"]})
 
-        logger.info(f"Admin {current_admin.get('email')} deleted supervisor {supervisor_id} ({name}, {contact_type}: {contact_value}, {area})")
+        logger.info(f"Admin {current_admin.get('email')} deleted supervisor {supervisor_id} ({name}, area: {area})")
 
         return {
             "message": "Supervisor deleted successfully",
             "supervisor_id": supervisor_id,
             "name": name,
-            "area": area,
-            "deleted_by": contact_type,
-            "contact_used": contact_value
+            "area": area
         }
 
     except HTTPException:
@@ -674,4 +703,329 @@ async def change_supervisor_password(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to change supervisor password: {str(e)}"
+        )
+
+
+# ============================================================================
+# ADMIN: QR Code Management APIs
+# ============================================================================
+
+from fastapi import Body
+from fastapi.responses import StreamingResponse, HTMLResponse
+
+@admin_router.post("/qr/create")
+async def admin_create_qr_code(
+    site: str = Body(..., embed=True, description="Site name created by the admin"),
+    post_name: str = Body(..., embed=True, description="Post name (e.g., canteen, gate, etc.)"),
+    current_admin: Dict[str, Any] = Depends(get_current_admin)
+):
+    """
+    ADMIN ONLY: Create a QR code for a specific site and post.
+    QR codes created by admin can be scanned by supervisors.
+    """
+    qr_locations_collection = get_qr_locations_collection()
+
+    if qr_locations_collection is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Normalize inputs
+    normalized_site = site.strip()
+    post_name = post_name.strip()
+
+    # Validation
+    if not normalized_site or not post_name:
+        raise HTTPException(status_code=400, detail="Site and post_name are required and cannot be empty")
+
+    try:
+        # Check for existing QR location
+        existing_qr = await qr_locations_collection.find_one({
+            "site": normalized_site,
+            "post": post_name,
+            "createdBy": "ADMIN"
+        })
+
+        if existing_qr:
+            qr_id = str(existing_qr["_id"])
+            logger.info(f"Found existing admin QR location with ID: {qr_id}")
+        else:
+            # Create new QR location document with admin info
+            qr_location_doc = {
+                "site": normalized_site,
+                "post": post_name,
+                "adminId": current_admin["_id"],
+                "createdBy": "ADMIN",
+                "createdAt": datetime.utcnow(),
+                "updatedAt": datetime.utcnow()
+            }
+
+            qr_result = await qr_locations_collection.insert_one(qr_location_doc)
+            qr_id = str(qr_result.inserted_id)
+            logger.info(f"Successfully created admin QR location with ID: {qr_id}")
+
+    except Exception as e:
+        logger.error(f"Database error during admin QR creation: {e}")
+        raise HTTPException(status_code=500, detail="Unable to create or find QR location")
+
+    # Generate QR code with site, post, QR id
+    qr_content = f"ADMIN:{normalized_site}:{post_name}:{qr_id}"
+
+    import qrcode, io
+    
+    # Create QR code with better settings
+    qr_code = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr_code.add_data(qr_content)
+    qr_code.make(fit=True)
+    
+    # Create image with white background
+    qr_img = qr_code.make_image(fill_color="black", back_color="white")
+    
+    buf = io.BytesIO()
+    qr_img.save(buf, format="PNG")
+    buf.seek(0)
+
+    return StreamingResponse(buf, media_type="image/png")
+
+
+@admin_router.get("/qr/list")
+async def admin_list_qr_codes(
+    current_admin: Dict[str, Any] = Depends(get_current_admin),
+    site: Optional[str] = Query(None, description="Filter by site name"),
+    format: Optional[str] = Query("json", description="Response format: 'json' or 'html'")
+):
+    """
+    ADMIN ONLY: List all QR codes created by admins.
+    """
+    try:
+        qr_locations_collection = get_qr_locations_collection()
+        if qr_locations_collection is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        # Build filter query for admin-created QR codes
+        filter_query = {"createdBy": "ADMIN"}
+
+        # Add site filter if provided
+        if site:
+            filter_query["site"] = {"$regex": site.strip(), "$options": "i"}
+
+        # Ensure 'post' field is not empty or null
+        filter_query["post"] = {"$exists": True, "$ne": ""}
+
+        # Get filtered QR locations created by admin
+        qr_locations = await qr_locations_collection.find(filter_query).sort("createdAt", -1).to_list(length=None)
+
+        formatted_qrs = []
+        for qr in qr_locations:
+            # Generate QR code image with better quality
+            qr_content = f"ADMIN:{qr.get('site', '')}:{qr.get('post', '')}:{str(qr['_id'])}"
+            
+            import qrcode, io, base64
+            from PIL import Image
+            
+            # Create QR code with better settings
+            qr_code = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr_code.add_data(qr_content)
+            qr_code.make(fit=True)
+            
+            # Create image with white background
+            qr_img = qr_code.make_image(fill_color="black", back_color="white")
+            
+            # Convert to bytes
+            buf = io.BytesIO()
+            qr_img.save(buf, format="PNG")
+            buf.seek(0)
+            
+            # Convert to base64 for JSON response
+            qr_image_base64 = base64.b64encode(buf.getvalue()).decode()
+            
+            qr_data = {
+                "qr_id": str(qr["_id"]),
+                "site": qr.get("site", ""),
+                "post": qr.get("post", ""),
+                "qr_content": qr_content,
+                "qr_image": f"data:image/png;base64,{qr_image_base64}",
+                "created_by": "ADMIN",
+                "admin_id": str(qr.get("adminId", "")),
+                "created_at": qr.get("createdAt").isoformat() if qr.get("createdAt") else None,
+                "updated_at": qr.get("updatedAt").isoformat() if qr.get("updatedAt") else None
+            }
+            formatted_qrs.append(qr_data)
+
+        # Prepare response message
+        total_count = len(formatted_qrs)
+        filter_message = f" for site '{site}'" if site else ""
+
+        # Return HTML format if requested
+        if format.lower() == "html":
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Admin QR Codes List</title>
+                <style>
+                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                    .qr-item {{ border: 1px solid #ddd; margin: 20px 0; padding: 15px; border-radius: 8px; }}
+                    .qr-info {{ display: inline-block; vertical-align: top; margin-left: 20px; }}
+                    img {{ border: 2px solid #333; }}
+                    h1 {{ color: #333; }}
+                    .total {{ background: #f0f0f0; padding: 10px; border-radius: 5px; margin-bottom: 20px; }}
+                    .admin-tag {{ background: #007bff; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px; }}
+                </style>
+            </head>
+            <body>
+                <h1>Admin QR Codes List</h1>
+                <div class="total">
+                    <strong>Found {total_count} admin-created QR codes{filter_message}</strong>
+                </div>
+            """
+            
+            for qr in formatted_qrs:
+                html_content += f"""
+                <div class="qr-item">
+                    <img src="{qr['qr_image']}" alt="QR Code" width="200" height="200">
+                    <div class="qr-info">
+                        <h3>{qr['site']} - {qr['post']} <span class="admin-tag">ADMIN CREATED</span></h3>
+                        <p><strong>QR ID:</strong> {qr['qr_id']}</p>
+                        <p><strong>Content:</strong> {qr['qr_content']}</p>
+                        <p><strong>Admin ID:</strong> {qr['admin_id']}</p>
+                        <p><strong>Created:</strong> {qr['created_at']}</p>
+                        <p><strong>Updated:</strong> {qr['updated_at']}</p>
+                    </div>
+                </div>
+                """
+            
+            html_content += """
+            </body>
+            </html>
+            """
+            
+            return HTMLResponse(content=html_content)
+
+        # Return JSON format (default)
+        return {
+            "qr_codes": formatted_qrs,
+            "total": total_count,
+            "site_filter": site,
+            "message": f"Found {total_count} admin-created QR codes{filter_message}"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing admin QR codes: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ============================================================================
+# ADMIN: Supervisor Scans Excel Export
+# ============================================================================
+
+@admin_router.get("/excel/supervisor-scans")
+async def get_supervisor_scans_excel(
+    current_admin: Dict[str, Any] = Depends(get_current_admin),
+    supervisor_area: Optional[str] = Query(None, description="Filter by supervisor area/city"),
+    days_back: int = Query(7, ge=1, le=30, description="Number of previous days to include in report")
+):
+    """
+    ADMIN ONLY: Generate Excel report of supervisor scans filtered by area and days
+    """
+    try:
+        scan_events_collection = get_scan_events_collection()
+        supervisors_collection = get_supervisors_collection()
+
+        if not all([scan_events_collection, supervisors_collection]):
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        # Build query filter for supervisor scans
+        query_filter = {"scannedBy": "SUPERVISOR"}
+
+        # Calculate date range using days_back
+        from utils.timezone_utils import parse_ist_date_range, format_excel_datetime
+        start_date, end_date = parse_ist_date_range(days_back)
+        query_filter["scannedAt"] = {"$gte": start_date, "$lte": end_date}
+
+        logger.info(f"[ADMIN] Supervisor scans Excel report request - Days back: {days_back}, Area: {supervisor_area or 'All areas'}")
+        logger.info(f"Date range: {start_date} to {end_date}")
+
+        # Filter by supervisor area if provided
+        if supervisor_area:
+            # Find supervisors in the specified area
+            supervisors_in_area = await supervisors_collection.find({
+                "areaCity": {"$regex": supervisor_area, "$options": "i"}
+            }).to_list(length=None)
+            
+            if supervisors_in_area:
+                supervisor_ids = [supervisor["_id"] for supervisor in supervisors_in_area]
+                query_filter["supervisorId"] = {"$in": supervisor_ids}
+            else:
+                # If no supervisors found in the area, return empty result
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No supervisors found in area: {supervisor_area}"
+                )
+
+        # Get supervisor scans
+        scans_cursor = scan_events_collection.find(query_filter).sort("scannedAt", -1)
+        scans = await scans_cursor.to_list(length=None)
+
+        if not scans:
+            area_msg = f" in area '{supervisor_area}'" if supervisor_area else ""
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No supervisor scan data found for the last {days_back} days{area_msg}"
+            )
+
+        # Prepare Excel data
+        excel_data = []
+        for scan in scans:
+            excel_data.append({
+                "Supervisor Name": scan.get("supervisorName", ""),
+                "Site": scan.get("site", ""),
+                "Post": scan.get("post", ""),
+                "QR Type": scan.get("qrType", ""),
+                "Scanned At": scan.get("scannedAt").strftime("%Y-%m-%d %H:%M:%S") if scan.get("scannedAt") else "",
+                "Address": scan.get("address", ""),
+                "Latitude": scan.get("deviceLat", ""),
+                "Longitude": scan.get("deviceLng", "")
+            })
+
+        # Create Excel file
+        import io
+        import pandas as pd
+        from fastapi.responses import StreamingResponse
+
+        output = io.BytesIO()
+        df = pd.DataFrame(excel_data)
+        df.to_excel(output, index=False, sheet_name="Supervisor Scans")
+        output.seek(0)
+
+        # Generate filename
+        area_suffix = f"_{supervisor_area.replace(' ', '_')}" if supervisor_area else ""
+        days_suffix = f"_{days_back}days"
+        filename = f"supervisor_scans_report{area_suffix}{days_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+        logger.info(f"[ADMIN] Supervisor scans Excel report generated: {filename}, Records: {len(excel_data)}")
+
+        return StreamingResponse(
+            io.BytesIO(output.read()),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating supervisor scans Excel report (ADMIN): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate Excel report: {str(e)}"
         )

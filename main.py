@@ -27,6 +27,7 @@ from routes.admin_routes_working import admin_router
 from routes.supervisor_routes import supervisor_router
 from routes.guard_routes_simple import guard_router
 from routes.qr_routes_simple import qr_router
+from debug_routes import debug_router
 
 # Configure logging
 logging.basicConfig(
@@ -126,6 +127,7 @@ app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 app.include_router(supervisor_router, prefix="/supervisor", tags=["Supervisor"])
 app.include_router(guard_router, prefix="/guard", tags=["Guard"])
 app.include_router(qr_router, prefix="/qr", tags=["QR Management"])
+app.include_router(debug_router, prefix="/debug", tags=["Debug"])
 
 
 @app.get("/", tags=["System"])

@@ -221,12 +221,11 @@ async def list_state_admins(
 @super_admin_router.delete("/delete-admin")
 async def delete_state_admin(
     name: str,
-    email: Optional[str] = None,
-    phone: Optional[str] = None,
+    area: str,
     current_super_admin: Dict[str, Any] = Depends(get_current_super_admin)
 ):
     """
-    SUPER_ADMIN ONLY: Delete a state-wise admin from the system by name and contact info
+    SUPER_ADMIN ONLY: Delete a state-wise admin from the system by name and area
     """
     try:
         users_collection = get_users_collection()
@@ -237,36 +236,24 @@ async def delete_state_admin(
                 detail="Database not available"
             )
 
-        # Validate that either email or phone is provided
-        if not email and not phone:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Either email or phone number must be provided"
-            )
-
         # Clean inputs
         name = name.strip()
-        contact_value = email.strip() if email else phone.strip()
-        contact_type = "email" if email else "phone"
+        area = area.strip()
 
         # Build search criteria
         search_criteria = {
             "role": "ADMIN",
-            "name": name
+            "name": name,
+            "state": area
         }
 
-        if email:
-            search_criteria["email"] = email.strip()
-        elif phone:
-            search_criteria["phone"] = phone.strip()
-
-        # Find admin by name and contact info
+        # Find admin by name and area
         admin = await users_collection.find_one(search_criteria)
 
         if not admin:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"State admin with name '{name}' and {contact_type} '{contact_value}' not found"
+                detail=f"State admin with name '{name}' in area '{area}' not found"
             )
 
         admin_id = str(admin["_id"])
@@ -282,15 +269,14 @@ async def delete_state_admin(
                 detail="Failed to delete admin"
             )
 
-        logger.info(f"Super admin {current_super_admin.get('email')} deleted state admin {admin_id} ({admin_name}, {contact_type}: {contact_value}, {admin_state})")
+        logger.info(f"Super admin {current_super_admin.get('email')} deleted state admin {admin_id} ({admin_name}, area: {area}, {admin_state})")
 
         return {
             "message": "State admin deleted successfully",
             "admin_id": admin_id,
             "name": admin_name,
-            "state": admin_state,
-            "deleted_by": contact_type,
-            "contact_used": contact_value
+            "area": area,
+            "state": admin_state
         }
 
     except HTTPException:
@@ -763,12 +749,12 @@ async def change_super_admin_password(
 async def search_users(
     query: Optional[str] = Query(None, description="Search by name, email, or phone"),
     state: Optional[str] = Query(None, description="Filter by state"),
-    role: Optional[str] = Query(None, description="Filter by role: 'fieldofficer' searches supervisors, 'supervisor' searches guards, 'admin' searches admins, 'super_admin' searches super admins"),
+    role: Optional[str] = Query(None, description="Filter by role: 'supervisor', 'guard', 'admin'"),
     current_super_admin: Dict[str, Any] = Depends(get_current_super_admin)
 ):
     """
     SUPER_ADMIN ONLY: Search for users across all collections by name, email, phone, or state
-    Special role mapping: 'fieldofficer' searches supervisors, 'supervisor' searches guards, 'admin' searches admins, 'super_admin' searches super admins
+    Simple role filtering: 'supervisor', 'guard', 'admin'
     """
     try:
         users_collection = get_users_collection()
@@ -791,26 +777,22 @@ async def search_users(
         role_filter = None
         if role:
             role_lower = role.lower()
-            if role_lower in ["fieldofficer", "field-officer", "field officer"]:
+            if role_lower == "supervisor":
                 role_filter = "supervisors"
-            elif role_lower == "supervisor":
+            elif role_lower == "guard":
                 role_filter = "guards"
             elif role_lower == "admin":
                 role_filter = "admins"
-            elif role_lower in ["super_admin", "super-admin", "superadmin"]:
-                role_filter = "super_admins"
         
-        # Also check query parameter for backward compatibility
+        # Also check query parameter for role keywords (backward compatibility)
         if query and not role_filter:
             query_lower = query.lower()
-            if query_lower in ["fieldofficer", "field-officer", "field officer"]:
+            if query_lower == "supervisor":
                 role_filter = "supervisors"
-            elif query_lower == "supervisor":
+            elif query_lower == "guard":
                 role_filter = "guards"
             elif query_lower == "admin":
                 role_filter = "admins"
-            elif query_lower in ["super_admin", "super-admin", "superadmin"]:
-                role_filter = "super_admins"
 
         # Build text search criteria if query is provided and not a role keyword
         if query and not role_filter:
@@ -882,25 +864,6 @@ async def search_users(
                     "collection": "users"
                 }
                 all_users.append(user_data)
-                
-        elif role_filter == "super_admins":
-            # Search only in users collection for SUPER_ADMIN role
-            super_admin_criteria = {**search_criteria, "role": "SUPER_ADMIN"}
-            users_cursor = users_collection.find(super_admin_criteria)
-            async for user in users_cursor:
-                user_data = {
-                    "id": str(user["_id"]),
-                    "name": user.get("name", ""),
-                    "email": user.get("email", ""),
-                    "phone": user.get("phone", ""),
-                    "role": user.get("role", ""),
-                    "areaCity": user.get("areaCity", ""),
-                    "isActive": user.get("isActive", True),
-                    "createdAt": user.get("createdAt"),
-                    "lastLogin": user.get("lastLogin"),
-                    "collection": "users"
-                }
-                all_users.append(user_data)
         
         else:
             # Search all collections when no specific role filter is applied
@@ -938,9 +901,10 @@ async def search_users(
 
 
 async def search_all_collections(users_collection, supervisors_collection, guards_collection, search_criteria, all_users):
-    """Helper function to search across all collections"""
-    # Search in users collection (admins and super admins)
-    users_cursor = users_collection.find(search_criteria)
+    """Helper function to search across all collections (excludes super admins)"""
+    # Search in users collection (admins only, exclude super admins)
+    admin_criteria = {**search_criteria, "role": "ADMIN"}
+    users_cursor = users_collection.find(admin_criteria)
     async for user in users_cursor:
         user_data = {
             "id": str(user["_id"]),

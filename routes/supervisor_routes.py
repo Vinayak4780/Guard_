@@ -513,7 +513,6 @@ async def generate_excel_report(
 
                 # Fetch guard details using guardId
                 guard = await guards_collection.find_one({"_id": guard_id}) if guard_id else None
-                guard_phone = guard.get("phone") if guard else "Unknown Phone"
 
                 # Convert UTC to IST for display
                 date_time = format_excel_datetime(scan.get("scannedAt"))
@@ -522,15 +521,11 @@ async def generate_excel_report(
                 # Handle different guard name fields from different endpoints
                 guard_name = scan.get("guardName") or scan.get("guard_name") or "Unknown Guard"
 
-                # Use guard email if available, otherwise fallback to phone number
-                guard_contact = scan.get("guardEmail") or guard_phone
-
                 row_data = {
                     "Date + Time (IST)": date_time,
                     "Action": "QR Code Scan",
                     "Site Name": site,
                     "Guard Name": guard_name,
-                    "Guard Contact": guard_contact,  # Added contact info
                     "Latitude": scan.get("deviceLat"),
                     "Longitude": scan.get("deviceLng"),
                     "Address": scan.get("address", "Unknown Address"),
@@ -696,22 +691,13 @@ async def add_guard(
 @supervisor_router.delete("/delete-guard")
 async def delete_guard(
     name: str,
-    email: Optional[str] = None,
-    phone: Optional[str] = None,
     current_supervisor: Dict[str, Any] = Depends(get_current_supervisor)
 ):
     """
-    SUPERVISOR ONLY: Delete a guard from the system by name and (email OR phone)
+    SUPERVISOR ONLY: Delete a guard from the system by name only
     Removes guard from both guards and users collections
     """
     try:
-        # Validate that either email or phone is provided
-        if not email and not phone:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Either email or phone number must be provided"
-            )
-
         users_collection = get_users_collection()
         guards_collection = get_guards_collection()
 
@@ -724,7 +710,7 @@ async def delete_guard(
         # Verify the guard belongs to this supervisor
         supervisor_id = current_supervisor["_id"]
 
-        # Normalize inputs - be more careful with phone normalization
+        # Normalize inputs
         name_normalized = name.strip()
         
         # Build search criteria
@@ -735,16 +721,6 @@ async def delete_guard(
                 {"supervisorId": supervisor_id}
             ]
         }
-        
-        # Add contact criteria
-        if email and email.strip():
-            search_criteria["email"] = email.strip()
-        elif phone and phone.strip():
-            # Try exact phone match first
-            search_criteria["$or"] = [
-                {"phone": phone.strip()},
-                {"phoneNumber": phone.strip()}
-            ]
 
         # Log the search criteria for debugging
         logger.debug(f"Search criteria for deleting guard: {search_criteria}")
@@ -761,7 +737,7 @@ async def delete_guard(
         
         if not guard:
             # Log what we're actually looking for vs what's in the database
-            logger.debug(f"Guard not found. Looking for: name='{name_normalized}', email='{email}', phone='{phone}', supervisorId='{supervisor_id}'")
+            logger.debug(f"Guard not found. Looking for: name='{name_normalized}', supervisorId='{supervisor_id}'")
             
             # Try to find any guards with this supervisor to debug
             all_supervisor_guards = await guards_collection.find({"$or": [
@@ -772,11 +748,9 @@ async def delete_guard(
             for g in all_supervisor_guards:
                 logger.debug(f"Existing guard: name='{g.get('name')}', email='{g.get('email')}', phone='{g.get('phone')}'")
             
-            contact_type = "email" if email else "phone"
-            contact_value = email if email else phone
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No guard found with name '{name}' and {contact_type} '{contact_value}' in the system"
+                detail=f"No guard found with name '{name}' in the system"
             )
 
         guard_id = str(guard["_id"])
@@ -791,9 +765,7 @@ async def delete_guard(
 
         logger.info(f"Supervisor {current_supervisor.get('name', 'Unknown')} deleted guard '{guard.get('name')}' with ID '{guard_id}'")
 
-        contact_type = "email" if email else "phone"
-        contact_value = email if email else phone
-        return {"message": f"Guard '{guard.get('name')}' with {contact_type} '{contact_value}' deleted successfully"}
+        return {"message": f"Guard '{guard.get('name')}' deleted successfully"}
 
     except HTTPException:
         raise
@@ -915,5 +887,120 @@ async def change_guard_password(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to change guard password: {str(e)}"
         )
+
+
+# ============================================================================
+# SUPERVISOR: Scan Admin QR Codes
+# ============================================================================
+
+from fastapi import Body
+
+@supervisor_router.post("/scan-admin-qr")
+async def supervisor_scan_admin_qr(
+    qr_data: str = Body(..., description="QR code data scanned by supervisor"),
+    device_lat: float = Body(..., description="Device latitude"),
+    device_lng: float = Body(..., description="Device longitude"),
+    current_supervisor: Dict[str, Any] = Depends(get_current_supervisor)
+):
+    """
+    SUPERVISOR ONLY: Scan QR codes created by admin.
+    Records scan events for admin-created QR codes with location tracking.
+    """
+    try:
+        from database import get_qr_locations_collection
+        
+        qr_locations_collection = get_qr_locations_collection()
+        scan_events_collection = get_scan_events_collection()
+
+        if qr_locations_collection is None or scan_events_collection is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        # Parse QR data - expected format: "ADMIN:site:post:qr_id"
+        qr_parts = qr_data.strip().split(":")
+        if len(qr_parts) != 4 or qr_parts[0] != "ADMIN":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid QR code format. Expected admin QR code."
+            )
+
+        _, site, post, qr_id = qr_parts
+
+        # Verify QR location exists and was created by admin
+        try:
+            qr_object_id = ObjectId(qr_id)
+        except:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid QR ID format"
+            )
+
+        qr_location = await qr_locations_collection.find_one({
+            "_id": qr_object_id,
+            "createdBy": "ADMIN",
+            "site": site,
+            "post": post
+        })
+
+        if not qr_location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="QR location not found or not created by admin"
+            )
+
+        # Get address from coordinates using TomTom service
+        address_info = await tomtom_service.get_address_from_coordinates(device_lat, device_lng)
+        
+        # Create scan event record
+        scan_event = {
+            "qrId": qr_object_id,
+            "supervisorId": current_supervisor["_id"],
+            "adminId": qr_location.get("adminId"),
+            "supervisorEmail": current_supervisor.get("email", ""),
+            "supervisorName": current_supervisor.get("name", ""),
+            "site": site,
+            "post": post,
+            "organization": qr_location.get("organization", ""),
+            "scannedAt": datetime.utcnow(),
+            "scannedBy": "SUPERVISOR",
+            "qrType": "ADMIN_CREATED",
+            "address": address_info.get("formatted_address", ""),
+            "deviceLat": device_lat,
+            "deviceLng": device_lng,
+            "timestampIST": datetime.utcnow().isoformat()
+        }
+
+        # Insert scan event
+        scan_result = await scan_events_collection.insert_one(scan_event)
+        scan_event_id = str(scan_result.inserted_id)
+
+        logger.info(f"Supervisor {current_supervisor.get('name')} scanned admin QR code {qr_id} at {site}-{post}")
+
+        return {
+            "message": "Admin QR code scanned successfully",
+            "scan_event_id": scan_event_id,
+            "qr_id": qr_id,
+            "site": site,
+            "post": post,
+            "qr_type": "ADMIN_CREATED",
+            "scanned_at": scan_event["scannedAt"].isoformat(),
+            "supervisor_name": current_supervisor.get("name", ""),
+            "location": {
+                "latitude": device_lat,
+                "longitude": device_lng,
+                "address": address_info.get("formatted_address", ""),
+                "address_lookup_success": address_info.get("success", False)
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error scanning admin QR code: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to scan admin QR code: {str(e)}"
+        )
+
+
 
 
