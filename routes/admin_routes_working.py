@@ -62,8 +62,7 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
                 detail="Database not available"
             )
         
-        # Get basic counts (exclude SUPER_ADMIN from user count)
-        total_users = await users_collection.count_documents({"role": {"$ne": "SUPER_ADMIN"}})
+        # Get basic counts (exclude user count from admin dashboard)
         total_supervisors = await supervisors_collection.count_documents({})
         total_guards = await guards_collection.count_documents({})
         
@@ -89,21 +88,8 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
         })
         
         # Get basic lists with simple information
-        users_list = []
         supervisors_list = []
         guards_list = []
-        
-        # Get all users with basic details (exclude SUPER_ADMIN, only admins get area field)
-        users_cursor = users_collection.find({"role": {"$ne": "SUPER_ADMIN"}})
-        async for user in users_cursor:
-            user_data = {
-                "name": user.get("name", ""),
-                "contact": user.get("email", "") or user.get("phone", "")
-            }
-            # Only show area for admin users
-            if user.get("role") == "ADMIN":
-                user_data["area"] = user.get("state", "N/A")
-            users_list.append(user_data)
         
         # Get all supervisors with basic details (no area field)
         supervisors_cursor = supervisors_collection.find({})
@@ -170,7 +156,6 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
         # Include simplified user data directly in response
         response_data = {
             "stats": {
-                "totalUsers": total_users,
                 "totalSupervisors": total_supervisors,
                 "totalGuards": total_guards,
                 "scansToday": total_scans_today,
@@ -179,7 +164,6 @@ async def get_admin_dashboard(current_admin: Dict[str, Any] = Depends(get_curren
             },
             "recentActivity": recent_scans,
             "adminInfo": admin_info,
-            "users": users_list,
             "supervisors": supervisors_list,
             "guards": guards_list
         }

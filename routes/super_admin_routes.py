@@ -956,3 +956,167 @@ async def search_all_collections(users_collection, supervisors_collection, guard
             "supervisorId": guard.get("supervisorId", "")
         }
         all_users.append(guard_data)
+
+
+# ============================================================================
+# SUPER ADMIN: Comprehensive Dashboard API
+# ============================================================================
+
+@super_admin_router.get("/dashboard")
+async def get_super_admin_dashboard(
+    current_super_admin: Dict[str, Any] = Depends(get_current_super_admin)
+):
+    """
+    SUPER_ADMIN ONLY: Comprehensive dashboard with all system statistics and detailed data
+    Includes all features previously in admin dashboard plus super admin capabilities
+    """
+    try:
+        users_collection = get_users_collection()
+        supervisors_collection = get_supervisors_collection()
+        guards_collection = get_guards_collection()
+        scan_events_collection = get_scan_events_collection()
+        
+        if not all([
+            users_collection is not None, 
+            supervisors_collection is not None, 
+            guards_collection is not None, 
+            scan_events_collection is not None
+        ]):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database not available"
+            )
+        
+        # Get comprehensive counts (exclude super admins from user count)
+        total_users = await users_collection.count_documents({"role": {"$ne": "SUPER_ADMIN"}})
+        total_supervisors = await supervisors_collection.count_documents({})
+        total_guards = await guards_collection.count_documents({})
+        
+        # Get today's scans count with improved logic
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        total_scans_today = await scan_events_collection.count_documents({
+            "scannedAt": {"$gte": today_start}
+        })
+        
+        # Get supervisor scans today
+        supervisor_scans_today = await scan_events_collection.count_documents({
+            "scannedAt": {"$gte": today_start},
+            "scannedBy": "SUPERVISOR"
+        })
+        
+        # Get guard scans today (including legacy records without scannedBy field)
+        guard_scans_today = await scan_events_collection.count_documents({
+            "scannedAt": {"$gte": today_start},
+            "$or": [
+                {"scannedBy": "GUARD"},
+                {"scannedBy": {"$exists": False}}  # Legacy records
+            ]
+        })
+        
+        # Get comprehensive lists with detailed information
+        users_list = []
+        supervisors_list = []
+        guards_list = []
+        
+        # Get all users with detailed information (exclude super admins)
+        users_cursor = users_collection.find({"role": {"$ne": "SUPER_ADMIN"}})
+        async for user in users_cursor:
+            user_data = {
+                "name": user.get("name", ""),
+                "contact": user.get("email", "") or user.get("phone", ""),
+                "role": user.get("role", ""),
+                "area": user.get("state", "N/A")
+            }
+            users_list.append(user_data)
+        
+        # Get all supervisors with basic details
+        supervisors_cursor = supervisors_collection.find({})
+        async for supervisor in supervisors_cursor:
+            supervisor_data = {
+                "name": supervisor.get("name", ""),
+                "contact": supervisor.get("email", "") or supervisor.get("phone", ""),
+                "area": supervisor.get("areaCity", "N/A")
+            }
+            supervisors_list.append(supervisor_data)
+        
+        # Get all guards with basic details
+        guards_cursor = guards_collection.find({})
+        async for guard in guards_cursor:
+            guard_data = {
+                "name": guard.get("name", ""),
+                "contact": guard.get("email", "") or guard.get("phone", ""),
+                "area": guard.get("areaCity", "N/A")
+            }
+            guards_list.append(guard_data)
+        
+        # Get recent activity with comprehensive data display
+        recent_scans_cursor = scan_events_collection.find({}) \
+            .sort("scannedAt", -1) \
+            .limit(15)  # More items for super admin
+        
+        recent_scans = []
+        async for scan in recent_scans_cursor:
+            # Get site information
+            site = scan.get("site", "Unknown Site") 
+            scanned_by = scan.get("scannedBy", "GUARD")  # Default to GUARD for legacy records
+            
+            if scanned_by == "SUPERVISOR":
+                scanner_name = scan.get("supervisorName", scan.get("supervisorEmail", "Unknown Supervisor"))
+                scanner_id = str(scan.get("supervisorId", ""))
+                scanner_email = scan.get("supervisorEmail", "")
+            else:
+                scanner_name = scan.get("guardName", scan.get("guardEmail", "Unknown Guard"))
+                scanner_id = str(scan.get("guardId", ""))
+                scanner_email = scan.get("guardEmail", "")
+            
+            scan_data = {
+                "_id": str(scan["_id"]),
+                "scannerId": scanner_id,
+                "scannerEmail": scanner_email,
+                "scannerName": scanner_name,
+                "scannerType": scanned_by,
+                "site": site,
+                "post": scan.get("post", ""),
+                "qrType": scan.get("qrType", "REGULAR"),
+                "scannedAt": scan.get("scannedAt"),
+                "deviceLat": scan.get("deviceLat"),
+                "deviceLng": scan.get("deviceLng"),
+                "address": scan.get("address", "")
+            }
+            recent_scans.append(scan_data)
+        
+        # Convert super admin ObjectIds to strings
+        super_admin_info = {
+            "_id": str(current_super_admin["_id"]),
+            "email": current_super_admin["email"],
+            "name": current_super_admin.get("name", "Super Admin"),
+            "role": current_super_admin.get("role", "SUPER_ADMIN")
+        }
+        
+        # Include comprehensive data in response
+        response_data = {
+            "stats": {
+                "totalUsers": total_users,
+                "totalSupervisors": total_supervisors,
+                "totalGuards": total_guards,
+                "scansToday": total_scans_today,
+                "supervisorScansToday": supervisor_scans_today,
+                "guardScansToday": guard_scans_today
+            },
+            "recentActivity": recent_scans,
+            "superAdminInfo": super_admin_info,
+            "users": users_list,
+            "supervisors": supervisors_list,
+            "guards": guards_list
+        }
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Super Admin Dashboard error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load super admin dashboard"
+        )
