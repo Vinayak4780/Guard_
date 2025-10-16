@@ -1,6 +1,7 @@
 """
 Email service for sending OTP and notifications
 Supports SMTP configuration with proper error handling
+Supports SendGrid API for cloud platforms (Render, Heroku, etc.)
 """
 
 import aiosmtplib
@@ -9,12 +10,14 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional
 import logging
 from config import settings
+import httpx
+import os
 
 logger = logging.getLogger(__name__)
 
 
 class EmailService:
-    """Email service for OTP and notifications"""
+    """Email service for OTP and notifications with SendGrid and SMTP support"""
     
     def __init__(self):
         self.smtp_host = settings.SMTP_HOST
@@ -24,8 +27,71 @@ class EmailService:
         self.from_email = settings.SMTP_FROM_EMAIL
         self.from_name = settings.SMTP_FROM_NAME
         
-        if not all([self.smtp_host, self.smtp_username, self.smtp_password, self.from_email]):
-            logger.warning("⚠️ Email service not properly configured. OTP emails will fail.")
+        # SendGrid API key (for cloud platforms)
+        self.sendgrid_api_key = os.getenv("SENDGRID_API_KEY", "")
+        
+        # Check which service is available
+        self.has_sendgrid = bool(self.sendgrid_api_key and self.sendgrid_api_key.startswith("SG."))
+        self.has_smtp = all([self.smtp_host, self.smtp_username, self.smtp_password, self.from_email])
+        
+        if not self.has_sendgrid and not self.has_smtp:
+            logger.warning("⚠️ No email service configured (neither SendGrid nor SMTP). OTP emails will use development mode.")
+        elif self.has_sendgrid:
+            logger.info("✅ SendGrid API configured for email delivery")
+        elif self.has_smtp:
+            logger.info("✅ SMTP configured for email delivery")
+    
+    async def _send_via_sendgrid(self, to_email: str, subject: str, html_content: str) -> bool:
+        """
+        Send email via SendGrid API (works on cloud platforms like Render)
+        
+        Args:
+            to_email: Recipient email
+            subject: Email subject
+            html_content: HTML email content
+            
+        Returns:
+            True if sent successfully
+        """
+        try:
+            url = "https://api.sendgrid.com/v3/mail/send"
+            headers = {
+                "Authorization": f"Bearer {self.sendgrid_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "personalizations": [
+                    {
+                        "to": [{"email": to_email}],
+                        "subject": subject
+                    }
+                ],
+                "from": {
+                    "email": self.from_email,
+                    "name": self.from_name
+                },
+                "content": [
+                    {
+                        "type": "text/html",
+                        "value": html_content
+                    }
+                ]
+            }
+            
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                
+                if response.status_code == 202:
+                    logger.info(f"✅ Email sent via SendGrid to {to_email}")
+                    return True
+                else:
+                    logger.error(f"❌ SendGrid API error: {response.status_code} - {response.text}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"❌ SendGrid email failed: {e}")
+            return False
     
     async def send_otp_email(self, to_email: str, otp: str, purpose: str = "verification") -> bool:
         """
@@ -40,24 +106,6 @@ class EmailService:
             True if email sent successfully, False otherwise
         """
         try:
-            # Check if email service is properly configured (not just present but valid)
-            is_configured = all([
-                self.smtp_host and self.smtp_host.strip(),  # Any valid SMTP host
-                self.smtp_username and self.smtp_username != "your-email@gmail.com" and "@" in self.smtp_username,
-                self.smtp_password and self.smtp_password != "your-16-digit-app-password-here" and self.smtp_password != "your-app-password-here" and self.smtp_password != "abcdefghijklmnop" and self.smtp_password != "DEVELOPMENT_MODE",
-                self.from_email and self.from_email != "your-email@gmail.com" and "@" in self.from_email
-            ])
-            
-            if not is_configured:
-                logger.warning("⚠️ Email service not configured with real credentials")
-                logger.warning("=" * 60)
-                logger.warning(f"🔑 DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
-                logger.warning(f"📧 For email: {to_email}")
-                logger.warning(f"⏰ Valid for {purpose}")
-                logger.warning("=" * 60)
-                print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")  # Also print to console
-                return True  # Return True for development mode
-            
             subject = "Your Guard Management System OTP"
             
             if purpose == "verification":
@@ -122,53 +170,82 @@ class EmailService:
                 </html>
                 """
             
-            # Create message
-            message = MIMEMultipart("alternative")
-            message["Subject"] = subject
-            message["From"] = f"{self.from_name} <{self.from_email}>"
-            message["To"] = to_email
+            # Try SendGrid first (for cloud platforms like Render)
+            if self.has_sendgrid:
+                logger.info("📧 Attempting to send email via SendGrid API...")
+                success = await self._send_via_sendgrid(to_email, subject, html_content)
+                if success:
+                    logger.info(f"✅ OTP email sent successfully via SendGrid to {to_email}")
+                    return True
+                else:
+                    logger.warning("⚠️ SendGrid failed, trying SMTP fallback...")
             
-            # Create HTML part
-            html_part = MIMEText(html_content, "html")
-            message.attach(html_part)
+            # Try SMTP if SendGrid not available or failed
+            if self.has_smtp:
+                logger.info("📧 Attempting to send email via SMTP...")
+                
+                # Check if email service is properly configured
+                is_configured = all([
+                    self.smtp_host and self.smtp_host.strip(),
+                    self.smtp_username and self.smtp_username != "your-email@gmail.com" and "@" in self.smtp_username,
+                    self.smtp_password and self.smtp_password not in [
+                        "your-16-digit-app-password-here",
+                        "your-app-password-here",
+                        "abcdefghijklmnop",
+                        "DEVELOPMENT_MODE"
+                    ],
+                    self.from_email and self.from_email != "your-email@gmail.com" and "@" in self.from_email
+                ])
+                
+                if is_configured:
+                    # Create message
+                    message = MIMEMultipart("alternative")
+                    message["Subject"] = subject
+                    message["From"] = f"{self.from_name} <{self.from_email}>"
+                    message["To"] = to_email
+                    
+                    # Create HTML part
+                    html_part = MIMEText(html_content, "html")
+                    message.attach(html_part)
+                    
+                    # Send email with fallback connection methods
+                    success = await self._send_email_with_fallback(
+                        message, to_email, f"OTP: {otp}"
+                    )
+                    
+                    if success:
+                        logger.info(f"✅ OTP email sent successfully via SMTP to {to_email}")
+                        return True
             
-            # Send email with fallback connection methods
-            success = await self._send_email_with_fallback(
-                message, to_email, f"OTP: {otp}"
-            )
-            
-            if success:
-                logger.info(f"OTP email sent successfully to {to_email}")
-                return True
-            else:
-                # If all methods fail, use development mode (Cloud platform detected)
-                logger.warning("🌐 Cloud platform SMTP blocking detected")
-                logger.warning("=" * 60)
-                logger.warning(f"🔑 DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
-                logger.warning(f"📧 For email: {to_email}")
-                logger.warning(f"🚀 Purpose: {purpose}")
-                logger.warning("🔧 Add SENDGRID_API_KEY environment variable for cloud email delivery")
-                logger.warning("=" * 60)
-                print(f"\n🔑 OTP CODE: {otp} (for {to_email}) - Purpose: {purpose}\n")
-                return True  # Return True for development mode
+            # If all methods fail, use development mode
+            logger.warning("=" * 60)
+            logger.warning("🔧 NO EMAIL SERVICE AVAILABLE - DEVELOPMENT MODE")
+            logger.warning(f"🔑 YOUR OTP CODE IS: {otp}")
+            logger.warning(f"📧 For email: {to_email}")
+            logger.warning(f"🚀 Purpose: {purpose}")
+            if not self.has_sendgrid:
+                logger.warning("� TIP: Add SENDGRID_API_KEY to .env for cloud email delivery")
+                logger.warning("   Get free API key at: https://signup.sendgrid.com/")
+            logger.warning("=" * 60)
+            print(f"\n🔑 OTP CODE: {otp} (for {to_email}) - Purpose: {purpose}\n")
+            return True  # Return True for development mode
             
         except aiosmtplib.SMTPAuthenticationError as e:
-            logger.error(f"Email authentication failed for {to_email}: {e}")
-            logger.warning("⚠️ Gmail credentials invalid. Check .env file or use App Password")
+            logger.error(f"❌ Email authentication failed for {to_email}: {e}")
             logger.warning("=" * 60)
             logger.warning(f"🔑 DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
             logger.warning(f"📧 For email: {to_email}")
             logger.warning("=" * 60)
-            print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")  # Also print to console
+            print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")
             return True  # Return True for development mode
         except Exception as e:
-            logger.error(f"Failed to send OTP email to {to_email}: {e}")
+            logger.error(f"❌ Failed to send OTP email to {to_email}: {e}")
             logger.warning("=" * 60)
             logger.warning(f"🔑 DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
             logger.warning(f"📧 For email: {to_email}")
             logger.warning(f"⚡ Error: {str(e)}")
             logger.warning("=" * 60)
-            print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")  # Also print to console
+            print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")
             return True  # Return True for development mode
     
     async def send_supervisor_credentials_email(self, to_email: str, name: str, password: str, area_city: str, admin_name: str) -> bool:
