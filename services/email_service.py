@@ -1,7 +1,6 @@
 """
 Email service for sending OTP and notifications
-Supports SMTP configuration with proper error handling
-Supports SendGrid API for cloud platforms (Render, Heroku, etc.)
+Supports SMTP configuration with proper error handling and multiple port fallback
 """
 
 import aiosmtplib
@@ -10,14 +9,12 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional
 import logging
 from config import settings
-import httpx
-import os
 
 logger = logging.getLogger(__name__)
 
 
 class EmailService:
-    """Email service for OTP and notifications with SendGrid and SMTP support"""
+    """Email service for OTP and notifications using SMTP"""
     
     def __init__(self):
         self.smtp_host = settings.SMTP_HOST
@@ -27,71 +24,13 @@ class EmailService:
         self.from_email = settings.SMTP_FROM_EMAIL
         self.from_name = settings.SMTP_FROM_NAME
         
-        # SendGrid API key (for cloud platforms)
-        self.sendgrid_api_key = os.getenv("SENDGRID_API_KEY", "")
-        
-        # Check which service is available
-        self.has_sendgrid = bool(self.sendgrid_api_key and self.sendgrid_api_key.startswith("SG."))
+        # Check if SMTP is configured
         self.has_smtp = all([self.smtp_host, self.smtp_username, self.smtp_password, self.from_email])
         
-        if not self.has_sendgrid and not self.has_smtp:
-            logger.warning("⚠️ No email service configured (neither SendGrid nor SMTP). OTP emails will use development mode.")
-        elif self.has_sendgrid:
-            logger.info("✅ SendGrid API configured for email delivery")
-        elif self.has_smtp:
-            logger.info("✅ SMTP configured for email delivery")
-    
-    async def _send_via_sendgrid(self, to_email: str, subject: str, html_content: str) -> bool:
-        """
-        Send email via SendGrid API (works on cloud platforms like Render)
-        
-        Args:
-            to_email: Recipient email
-            subject: Email subject
-            html_content: HTML email content
-            
-        Returns:
-            True if sent successfully
-        """
-        try:
-            url = "https://api.sendgrid.com/v3/mail/send"
-            headers = {
-                "Authorization": f"Bearer {self.sendgrid_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "personalizations": [
-                    {
-                        "to": [{"email": to_email}],
-                        "subject": subject
-                    }
-                ],
-                "from": {
-                    "email": self.from_email,
-                    "name": self.from_name
-                },
-                "content": [
-                    {
-                        "type": "text/html",
-                        "value": html_content
-                    }
-                ]
-            }
-            
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 202:
-                    logger.info(f"✅ Email sent via SendGrid to {to_email}")
-                    return True
-                else:
-                    logger.error(f"❌ SendGrid API error: {response.status_code} - {response.text}")
-                    return False
-                    
-        except Exception as e:
-            logger.error(f"❌ SendGrid email failed: {e}")
-            return False
+        if not self.has_smtp:
+            logger.warning("⚠️ SMTP not configured. OTP emails will use development mode.")
+        else:
+            logger.info(f"✅ SMTP configured: {self.smtp_host}:{self.smtp_port}")
     
     async def send_otp_email(self, to_email: str, otp: str, purpose: str = "verification") -> bool:
         """
@@ -219,13 +158,11 @@ class EmailService:
             
             # If all methods fail, use development mode
             logger.warning("=" * 60)
-            logger.warning("🔧 NO EMAIL SERVICE AVAILABLE - DEVELOPMENT MODE")
+            logger.warning("🔧 SMTP FAILED - DEVELOPMENT MODE")
             logger.warning(f"🔑 YOUR OTP CODE IS: {otp}")
             logger.warning(f"📧 For email: {to_email}")
             logger.warning(f"🚀 Purpose: {purpose}")
-            if not self.has_sendgrid:
-                logger.warning("� TIP: Add SENDGRID_API_KEY to .env for cloud email delivery")
-                logger.warning("   Get free API key at: https://signup.sendgrid.com/")
+            logger.warning("💡 Note: Cloud platforms like Render may block SMTP ports")
             logger.warning("=" * 60)
             print(f"\n🔑 OTP CODE: {otp} (for {to_email}) - Purpose: {purpose}\n")
             return True  # Return True for development mode
@@ -716,61 +653,44 @@ class EmailService:
         """
         Try multiple SMTP connection methods for better compatibility with cloud platforms like Render
         """
-        # Quick timeout test to detect cloud platform SMTP blocking
-        import asyncio
-        import socket
-        
-        async def quick_connection_test():
-            """Test if SMTP ports are accessible with very short timeout"""
-            try:
-                # Test with very short timeout (3 seconds)
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.smtp_host, 587),
-                    timeout=3.0
-                )
-                writer.close()
-                await writer.wait_closed()
-                return True
-            except:
-                return False
-        
-        # If quick test fails, likely on a cloud platform with blocked SMTP
-        try:
-            is_smtp_accessible = await quick_connection_test()
-            if not is_smtp_accessible:
-                logger.warning("🚫 SMTP ports appear to be blocked (cloud platform detected)")
-                logger.warning("🔄 Switching to development mode for email delivery")
-                return False  # This will trigger development mode in calling functions
-        except Exception as e:
-            logger.warning(f"⚠️ SMTP accessibility test failed: {e}")
-        
         connection_methods = [
-            # Method 1: SSL on port 465 (often works better on cloud platforms)
+            # Method 1: SSL on port 465 (often works better on cloud platforms like Render)
             {
                 "port": 465,
                 "use_tls": True,
                 "start_tls": False,
-                "description": "SSL on port 465"
+                "description": "SSL on port 465",
+                "timeout": 30
             },
             # Method 2: TLS on port 587 (standard method)
             {
                 "port": 587,
                 "use_tls": False,
                 "start_tls": True,
-                "description": "TLS on port 587 with STARTTLS"
+                "description": "TLS on port 587 with STARTTLS",
+                "timeout": 30
             },
-            # Method 3: TLS on port 587 without STARTTLS
+            # Method 3: Direct TLS on port 587
             {
                 "port": 587,
                 "use_tls": True,
                 "start_tls": False,
-                "description": "TLS on port 587 (no STARTTLS)"
+                "description": "Direct TLS on port 587",
+                "timeout": 30
+            },
+            # Method 4: Non-secure port 25 (fallback)
+            {
+                "port": 25,
+                "use_tls": False,
+                "start_tls": True,
+                "description": "Port 25 with STARTTLS",
+                "timeout": 30
             }
         ]
         
         for method in connection_methods:
             try:
-                logger.info(f"🔄 Trying email method: {method['description']}")
+                logger.info(f"🔄 Attempting: {method['description']}")
                 
                 await aiosmtplib.send(
                     message,
@@ -780,7 +700,7 @@ class EmailService:
                     start_tls=method["start_tls"],
                     username=self.smtp_username,
                     password=self.smtp_password,
-                    timeout=10  # Shorter timeout to fail faster
+                    timeout=method["timeout"]
                 )
                 
                 logger.info(f"✅ Email sent successfully using {method['description']}")
@@ -790,7 +710,8 @@ class EmailService:
                 logger.warning(f"❌ {method['description']} failed: {str(e)}")
                 continue
         
-        logger.error("🚨 All email connection methods failed")
+        logger.error("🚨 All SMTP connection methods failed")
+        logger.error("💡 Cloud platforms like Render often block SMTP ports for security")
         return False
 
 
