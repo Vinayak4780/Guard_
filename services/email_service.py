@@ -109,17 +109,7 @@ class EmailService:
                 </html>
                 """
             
-            # Try SendGrid first (for cloud platforms like Render)
-            if self.has_sendgrid:
-                logger.info("📧 Attempting to send email via SendGrid API...")
-                success = await self._send_via_sendgrid(to_email, subject, html_content)
-                if success:
-                    logger.info(f"✅ OTP email sent successfully via SendGrid to {to_email}")
-                    return True
-                else:
-                    logger.warning("⚠️ SendGrid failed, trying SMTP fallback...")
-            
-            # Try SMTP if SendGrid not available or failed
+            # Try SMTP with multiple port configurations
             if self.has_smtp:
                 logger.info("📧 Attempting to send email via SMTP...")
                 
